@@ -1,0 +1,43 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go
+*.test
+*.out
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Node (for web/)
+web/node_modules/
+web/.next/
+web/out/
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+*.log
+
+# Secrets
+*.pem
+*.key

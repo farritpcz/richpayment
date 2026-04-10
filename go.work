@@ -1,0 +1,17 @@
+go 1.26.1
+
+use (
+	./pkg
+	./services/gateway
+	./services/auth
+	./services/user
+	./services/order
+	./services/wallet
+	./services/withdrawal
+	./services/commission
+	./services/bank
+	./services/parser
+	./services/telegram
+	./services/notification
+	./services/scheduler
+)

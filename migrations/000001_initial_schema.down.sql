@@ -1,0 +1,21 @@
+-- Drop all tables in reverse order
+DROP TABLE IF EXISTS commission_payouts;
+DROP TABLE IF EXISTS webhook_deliveries;
+DROP TABLE IF EXISTS system_config;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS fund_transfers;
+DROP TABLE IF EXISTS slip_verifications;
+DROP TABLE IF EXISTS sms_messages;
+DROP TABLE IF EXISTS commission_daily_summary;
+DROP TABLE IF EXISTS commissions;
+DROP TABLE IF EXISTS withdrawals;
+DROP TABLE IF EXISTS wallet_ledger;
+DROP TABLE IF EXISTS deposit_orders;
+DROP TABLE IF EXISTS wallets;
+DROP TABLE IF EXISTS holding_accounts;
+DROP TABLE IF EXISTS bank_account_merchant_map;
+DROP TABLE IF EXISTS bank_accounts;
+DROP TABLE IF EXISTS partners;
+DROP TABLE IF EXISTS merchants;
+DROP TABLE IF EXISTS agents;
+DROP TABLE IF EXISTS admins;
