@@ -80,7 +80,9 @@ type User struct {
 
 // Session represents an authenticated user session stored in Redis. It
 // contains the minimum set of claims needed for downstream services to
-// authorise requests without hitting the database.
+// authorise requests without hitting the database, plus security-related
+// fields for IP binding, device fingerprinting, and TOTP brute-force
+// protection.
 type Session struct {
 	// ID is the unique session identifier (UUID string), used as the Redis key suffix.
 	ID string `json:"id"`
@@ -106,4 +108,28 @@ type Session struct {
 	// ExpiresAt is the timestamp when the session expires and should be
 	// considered invalid.
 	ExpiresAt time.Time `json:"expires_at"`
+
+	// ClientIP is the IP address of the client that created this session.
+	// On every subsequent validation the request IP is compared with this
+	// value; a mismatch triggers session invalidation and an admin alert,
+	// protecting against session hijacking from a different network.
+	ClientIP string `json:"client_ip"`
+
+	// UserAgentHash is a SHA-256 hex digest of the User-Agent header
+	// captured at login time. If the User-Agent changes mid-session the
+	// session is invalidated, preventing cookie theft across different
+	// browsers or devices.
+	UserAgentHash string `json:"user_agent_hash"`
+
+	// TOTPFailures counts how many consecutive failed TOTP verification
+	// attempts have been made within this session. After exceeding the
+	// maximum allowed attempts the session is temporarily locked to
+	// mitigate TOTP brute-force attacks.
+	TOTPFailures int `json:"totp_failures"`
+
+	// TOTPLockedUntil is the UTC timestamp until which this session is
+	// locked due to excessive TOTP failures. If set and still in the
+	// future, TOTP verification requests are rejected with an appropriate
+	// error message telling the user to wait.
+	TOTPLockedUntil *time.Time `json:"totp_locked_until,omitempty"`
 }

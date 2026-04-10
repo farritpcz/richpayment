@@ -1,0 +1,165 @@
+# =============================================================================
+# Air Configuration - Hot-Reload สำหรับ Go Development
+# =============================================================================
+#
+# Air เป็นเครื่องมือ live-reload สำหรับ Go applications
+# Air is a live-reload tool for Go applications.
+#
+# เมื่อแก้ไขไฟล์ .go, air จะ:
+# When .go files change, air will:
+#   1. ตรวจจับการเปลี่ยนแปลง (detect changes)
+#   2. Build binary ใหม่ (rebuild binary)
+#   3. หยุด process เก่า (stop old process)
+#   4. รัน binary ใหม่ (start new binary)
+#
+# การติดตั้ง / Installation:
+#   go install github.com/air-verse/air@latest
+#
+# การใช้งาน / Usage:
+#   cd services/gateway && air    # รันใน directory ของ service
+#   make run-gateway              # หรือใช้ Makefile (แนะนำ)
+#
+# ไฟล์นี้จะถูก copy ไปยังทุก service directory โดย air จะหาไฟล์นี้
+# ตาม hierarchy: ./air.toml -> ./.air.toml -> ../../.air.toml
+# This file is found by air following the hierarchy:
+# ./air.toml -> ./.air.toml -> ../../.air.toml (project root)
+#
+# =============================================================================
+
+# root directory สำหรับ watching files
+# ใช้ "." เพราะ air จะรันจากภายใน service directory (เช่น services/gateway/)
+# Root directory for watching files
+# Uses "." because air runs from within service directory (e.g., services/gateway/)
+root = "."
+
+# โฟลเดอร์ temp สำหรับเก็บ binary ที่ build แล้ว
+# Temp directory for storing built binaries
+tmp_dir = "tmp"
+
+# =============================================================================
+# [build] - การตั้งค่าการ build
+# [build] - Build configuration
+# =============================================================================
+[build]
+  # คำสั่ง build - คอมไพล์ Go binary จาก cmd/main.go
+  # Build command - compile Go binary from cmd/main.go
+  # output ไปที่ ./tmp/main เพื่อไม่ให้ปนกับ source code
+  # Output to ./tmp/main to keep it separate from source code
+  cmd = "go build -o ./tmp/main ./cmd/main.go"
+
+  # binary ที่จะรันหลัง build สำเร็จ
+  # Binary to run after successful build
+  bin = "./tmp/main"
+
+  # arguments เพิ่มเติมที่จะส่งให้ binary (ว่างเปล่า = ไม่มี)
+  # Additional arguments to pass to the binary (empty = none)
+  args_bin = []
+
+  # ไฟล์ที่ต้องการ watch - ดูเฉพาะ .go files
+  # Files to watch - only watch .go files
+  # รองรับ glob pattern / Supports glob patterns
+  include_ext = ["go"]
+
+  # โฟลเดอร์ที่ต้องการ watch เพิ่มเติม (นอกจาก root)
+  # Additional directories to watch (besides root)
+  # watch ไฟล์ใน shared pkg/ ด้วย เพราะ services ใช้ร่วมกัน
+  # Also watch shared pkg/ files since services share them
+  include_dir = []
+
+  # ไฟล์ที่ไม่ต้อง watch (exclude) - ลด noise จาก directories ที่ไม่เกี่ยว
+  # Files to exclude from watching - reduce noise from irrelevant directories
+  exclude_dir = ["tmp", "vendor", "tests", "testdata", "node_modules", ".git", "bin"]
+
+  # regex pattern สำหรับ exclude ไฟล์ที่ไม่ต้องการ
+  # Regex pattern to exclude unwanted files
+  # ข้าม test files (_test.go) เพราะไม่ต้อง rebuild เมื่อแก้ test
+  # Skip test files (_test.go) - no need to rebuild when editing tests
+  exclude_regex = ["_test\\.go$"]
+
+  # ไม่ต้อง exclude ไฟล์อะไรเพิ่มเติม
+  # No additional file exclusions
+  exclude_unchanged = true
+
+  # ติดตาม symlinks ด้วย / Follow symlinks
+  follow_symlink = false
+
+  # delay ก่อน build หลังตรวจพบการเปลี่ยนแปลง (มิลลิวินาที)
+  # Delay before building after detecting changes (milliseconds)
+  # ใช้ 500ms เพื่อรอให้ save ทุกไฟล์เสร็จก่อน (กรณี save หลายไฟล์พร้อมกัน)
+  # Use 500ms to wait for all file saves to complete (batch saves)
+  delay = 500
+
+  # หยุด process เก่าเมื่อเริ่ม build ใหม่ / Stop old process when starting new build
+  stop_on_error = true
+
+  # ส่ง signal SIGTERM ก่อน SIGKILL เพื่อให้ graceful shutdown
+  # Send SIGTERM before SIGKILL for graceful shutdown
+  send_interrupt = true
+
+  # รอ 5 วินาทีหลัง SIGTERM ก่อนส่ง SIGKILL / Wait 5s after SIGTERM before SIGKILL
+  kill_delay = 5000
+
+  # log output ของ air เอง / Log air's own output
+  log = "tmp/air.log"
+
+  # แสดง log ใน terminal ด้วย / Also show log in terminal
+  poll = false
+
+  # รอก่อน restart (มิลลิวินาที) / Wait before restart (milliseconds)
+  poll_interval = 0
+
+  # rerun binary เมื่อ build สำเร็จ / Rerun binary after successful build
+  rerun = false
+
+  # delay ก่อน rerun / Delay before rerun
+  rerun_delay = 500
+
+# =============================================================================
+# [log] - การตั้งค่า log output
+# [log] - Log output configuration
+# =============================================================================
+[log]
+  # แสดงเวลาใน log / Show time in log
+  time = true
+
+  # แสดงชื่อ binary ที่รันอยู่ / Show running binary name
+  main_only = false
+
+# =============================================================================
+# [color] - สีของ log output (ช่วยให้อ่านง่ายขึ้น)
+# [color] - Log output colors (improves readability)
+# =============================================================================
+[color]
+  # สี log หลัก / Main log color
+  main = "magenta"
+
+  # สี log ของ watcher / Watcher log color
+  watcher = "cyan"
+
+  # สี log ของ build / Build log color
+  build = "yellow"
+
+  # สี log ของ runner / Runner log color
+  runner = "green"
+
+# =============================================================================
+# [misc] - การตั้งค่าอื่นๆ
+# [misc] - Miscellaneous settings
+# =============================================================================
+[misc]
+  # ลบ tmp directory เมื่อ air หยุดทำงาน / Delete tmp directory when air stops
+  # ตั้งเป็น false เพื่อเก็บ binary ไว้สำหรับ debug
+  # Set to false to keep binary for debugging
+  clean_on_exit = true
+
+# =============================================================================
+# [screen] - การตั้งค่าหน้าจอ
+# [screen] - Screen settings
+# =============================================================================
+[screen]
+  # เคลียร์หน้าจอเมื่อ rebuild / Clear screen on rebuild
+  # ช่วยให้เห็น log ใหม่ได้ชัดเจน / Helps see new logs clearly
+  clear_on_rebuild = true
+
+  # แสดง air banner ตอนเริ่มต้น / Show air banner on start
+  keep_scroll = true

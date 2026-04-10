@@ -48,7 +48,7 @@ func main() {
 
 	// Services.
 	totpSvc := service.NewTOTPService()
-	authSvc := service.NewAuthService(repo, rdb, totpSvc)
+	authSvc := service.NewAuthService(repo, rdb, totpSvc, log)
 
 	// HTTP handler.
 	authHandler := handler.NewAuthHandler(authSvc)

@@ -1,10 +1,18 @@
 // Package handler provides HTTP transport for the auth service. It translates
 // incoming JSON requests into service calls and writes JSON responses.
+//
+// Security note: This handler extracts the client IP address and User-Agent
+// header from each request and passes them to the auth service for IP-based
+// rate limiting, session IP binding, and User-Agent fingerprinting. The
+// client IP is read from the X-Forwarded-For header (set by the reverse
+// proxy / load balancer) or falls back to RemoteAddr if the header is absent.
 package handler
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/farritpcz/richpayment/services/auth/internal/model"
 	"github.com/farritpcz/richpayment/services/auth/internal/service"
@@ -101,8 +109,9 @@ type errorResponse struct {
 // --- handlers ----------------------------------------------------------------
 
 // Login handles POST /auth/login. It decodes the request body, validates
-// required fields, delegates to AuthService.Login, and returns either a
-// session payload or an error.
+// required fields, extracts the client IP and User-Agent for rate limiting
+// and session binding, then delegates to AuthService.Login. If the login
+// is rate-limited, it returns HTTP 429 with a Retry-After header.
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -119,8 +128,22 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		req.UserType = model.UserTypeAdmin
 	}
 
-	sess, err := h.auth.Login(r.Context(), req.Email, req.Password, req.TOTPCode, req.UserType)
+	// Extract client IP and User-Agent for security features.
+	// The IP is used for rate limiting and session binding; the
+	// User-Agent is hashed and stored for session fingerprinting.
+	clientIP := extractClientIP(r)
+	userAgent := r.UserAgent()
+
+	sess, retryAfter, err := h.auth.Login(r.Context(), req.Email, req.Password, req.TOTPCode, req.UserType, clientIP, userAgent)
 	if err != nil {
+		// If retryAfter > 0, the login was rejected by the IP rate
+		// limiter. Return HTTP 429 with a Retry-After header so the
+		// client knows how long to wait before retrying.
+		if retryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: err.Error()})
 		return
 	}
@@ -158,8 +181,10 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 // ValidateSession handles POST /auth/validate. It checks whether the supplied
-// session ID corresponds to an active, non-expired session and returns the
-// session metadata when valid.
+// session ID corresponds to an active, non-expired session. It also forwards
+// the client IP and User-Agent to the service layer for IP binding and
+// fingerprint verification. If either check fails, the session is
+// automatically invalidated and the response indicates an invalid session.
 func (h *AuthHandler) ValidateSession(w http.ResponseWriter, r *http.Request) {
 	var req validateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -172,7 +197,13 @@ func (h *AuthHandler) ValidateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := h.auth.ValidateSession(r.Context(), req.SessionID)
+	// Extract the client IP and User-Agent from the HTTP request so
+	// the auth service can verify them against the values stored in
+	// the session at login time.
+	clientIP := extractClientIP(r)
+	userAgent := r.UserAgent()
+
+	sess, err := h.auth.ValidateSession(r.Context(), req.SessionID, clientIP, userAgent)
 	if err != nil {
 		writeJSON(w, http.StatusOK, validateResponse{Valid: false})
 		return
@@ -196,4 +227,36 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// extractClientIP extracts the real client IP address from the request.
+// It first checks the X-Forwarded-For header (set by reverse proxies and
+// load balancers), taking only the first (leftmost) IP which represents
+// the original client. If the header is absent, it falls back to
+// r.RemoteAddr, stripping the port number if present.
+//
+// This IP is used for:
+//   - IP-based login rate limiting (max 10 attempts/hour per IP).
+//   - Session IP binding (stored at login, verified on every validation).
+func extractClientIP(r *http.Request) string {
+	// X-Forwarded-For may contain multiple IPs: "client, proxy1, proxy2".
+	// The first entry is the original client IP.
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Parse just the first IP from the comma-separated list.
+		for i := 0; i < len(xff); i++ {
+			if xff[i] == ',' {
+				return xff[:i]
+			}
+		}
+		return xff
+	}
+
+	// Fall back to RemoteAddr (e.g. "192.168.1.1:12345").
+	// Strip the port if present.
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// RemoteAddr might not have a port (e.g. in tests).
+		return r.RemoteAddr
+	}
+	return host
 }

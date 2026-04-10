@@ -66,23 +66,44 @@ func main() {
 	)
 
 	// ---------------------------------------------------------------
-	// 4. Repository layer
+	// 4. Redis client for distributed locking
+	// ---------------------------------------------------------------
+	// The wallet-service uses Redis distributed locks (SETNX with TTL)
+	// as a secondary defense against race conditions. The primary defense
+	// is PostgreSQL SELECT ... FOR UPDATE, but the Redis lock prevents
+	// most concurrent requests from even reaching the database, reducing
+	// contention and improving performance under high concurrency.
+	redisCfg := config.LoadRedisConfig()
+	redisClient, err := database.NewRedisClient(ctx, redisCfg.Addr(), redisCfg.Password, redisCfg.DB)
+	if err != nil {
+		log.Error("failed to connect to Redis", "err", err, "addr", redisCfg.Addr())
+		os.Exit(1)
+	}
+	defer redisClient.Close()
+	log.Info("connected to Redis",
+		"addr", redisCfg.Addr(),
+		"db", redisCfg.DB,
+	)
+
+	// ---------------------------------------------------------------
+	// 5. Repository layer
 	// ---------------------------------------------------------------
 	// The PostgresWalletRepo implements the WalletRepository interface
 	// and provides all data-access operations for wallets and ledger
-	// entries.
+	// entries, including transactional methods with FOR UPDATE locking.
 	walletRepo := repository.NewPostgresWalletRepo(pool)
 
 	// ---------------------------------------------------------------
-	// 5. Service layer
+	// 6. Service layer
 	// ---------------------------------------------------------------
-	// The WalletService encapsulates all business rules: optimistic
-	// locking, balance validation, ledger entry creation, etc. It
-	// depends only on the repository interface, not on pgx directly.
-	walletSvc := service.NewWalletService(walletRepo)
+	// The WalletService encapsulates all business rules: distributed
+	// locking, atomic transactions with FOR UPDATE, balance validation,
+	// idempotency checking, and ledger entry creation. It depends on
+	// the repository interface and the Redis client for locking.
+	walletSvc := service.NewWalletService(walletRepo, redisClient)
 
 	// ---------------------------------------------------------------
-	// 6. HTTP handler and routing
+	// 7. HTTP handler and routing
 	// ---------------------------------------------------------------
 	// The WalletHandler translates HTTP requests/responses into
 	// service-layer calls and back.
@@ -100,7 +121,7 @@ func main() {
 	})
 
 	// ---------------------------------------------------------------
-	// 7. HTTP server configuration
+	// 8. HTTP server configuration
 	// ---------------------------------------------------------------
 	// The port defaults to 8084 but can be overridden via the PORT
 	// environment variable.
@@ -121,7 +142,7 @@ func main() {
 	}
 
 	// ---------------------------------------------------------------
-	// 8. Graceful shutdown
+	// 9. Graceful shutdown
 	// ---------------------------------------------------------------
 	// A separate goroutine listens for SIGINT (Ctrl+C) and SIGTERM
 	// (sent by Docker/K8s on stop). When a signal arrives, the root
@@ -146,7 +167,7 @@ func main() {
 	}()
 
 	// ---------------------------------------------------------------
-	// 9. Start listening
+	// 10. Start listening
 	// ---------------------------------------------------------------
 	log.Info("wallet-service starting", "port", port)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

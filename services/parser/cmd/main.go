@@ -134,8 +134,35 @@ func main() {
 		},
 	}
 
+	// --- Configure anti-spoofing security ---
+	// Load anti-spoofing confidence scoring configuration with production defaults.
+	// Score >= 80: auto-approve with 30s verification delay
+	// Score 50-79: delay 60s then approve
+	// Score < 50:  require manual admin approval
+	// Deposits >= 50,000 THB: always require manual admin approval
+	antiSpoofCfg := service.DefaultAntiSpoofConfig()
+
+	// --- Configure anomaly detection ---
+	// Load anomaly detection configuration with production defaults.
+	// Rate limit: 10 SMS per bank account per minute.
+	// Telegram alerts are optional — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
+	// environment variables to enable admin alerting.
+	anomalyCfg := service.DefaultAnomalyConfig()
+	anomalyCfg.TelegramBotToken = config.Get("TELEGRAM_BOT_TOKEN", "")
+	anomalyCfg.TelegramChatID = config.Get("TELEGRAM_CHAT_ID", "")
+
 	// --- Build the service layer ---
-	parserSvc := service.NewParserService(smsRepo, orderMatcher, bankAccountMappings, log)
+	// The parser service now includes anti-spoofing confidence scoring,
+	// duplicate SMS detection, and SMS rate anomaly monitoring.
+	parserSvc := service.NewParserService(
+		smsRepo,
+		orderMatcher,
+		bankAccountMappings,
+		log,
+		rdb,
+		antiSpoofCfg,
+		anomalyCfg,
+	)
 
 	// --- Build HTTP handlers ---
 	smsHandler := handler.NewSMSHandler(parserSvc, log)

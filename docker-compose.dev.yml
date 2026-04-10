@@ -1,0 +1,167 @@
+# =============================================================================
+# Docker Compose - RichPayment Development Environment (สภาพแวดล้อมสำหรับพัฒนา)
+# =============================================================================
+#
+# ไฟล์นี้สำหรับ LOCAL DEVELOPMENT เท่านั้น!
+# This file is for LOCAL DEVELOPMENT only!
+#
+# รัน infrastructure (Postgres, Redis, NATS) แบบ containerized
+# แต่ไม่รัน Go services ใน container - นักพัฒนารัน services ด้วย `go run` หรือ `air`
+# บนเครื่อง host โดยตรง เพื่อให้ได้ hot-reload และ debug ได้ง่าย
+#
+# Runs infrastructure (Postgres, Redis, NATS) as containers,
+# but does NOT run Go services in containers. Developers run services
+# locally with `go run` or `air` for hot-reload and easy debugging.
+#
+# ข้อแตกต่างจาก docker-compose.yml (production):
+# Differences from docker-compose.yml (production):
+#   - ไม่มี Go service containers (12 microservices)
+#   - ports เปิดให้ host เข้าถึงได้ทั้งหมด (สำหรับ go run บน host)
+#   - ไม่มี internal/public network separation
+#   - ใช้ password เดียวกันกับ production compose เพื่อความสะดวก
+#
+# วิธีใช้ / Usage:
+#   docker compose -f docker-compose.dev.yml up -d       # เริ่ม infrastructure
+#   docker compose -f docker-compose.dev.yml down         # หยุด infrastructure
+#   docker compose -f docker-compose.dev.yml down -v      # หยุด + ลบ data ทั้งหมด
+#
+# หรือใช้ Makefile:
+#   make dev-up       # เริ่ม infrastructure
+#   make dev-down     # หยุด infrastructure
+#   make dev-reset    # หยุด + ลบ data + เริ่มใหม่ (fresh DB)
+#
+# =============================================================================
+
+# เวอร์ชันของ Docker Compose file format
+# Version of Docker Compose file format
+version: '3.8'
+
+# =============================================================================
+# Services - เฉพาะ infrastructure เท่านั้น (ไม่มี Go services)
+# Infrastructure only - NO Go service containers
+# =============================================================================
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 - ฐานข้อมูลหลักของระบบ
+  # Main relational database for all persistent data
+  # เปิด port 5432 ให้ Go services บน host เชื่อมต่อได้
+  # Port 5432 exposed for Go services running on host to connect
+  # ---------------------------------------------------------------------------
+  postgres:
+    # ใช้ Alpine variant เพราะขนาดเล็กกว่า (~80MB vs ~400MB)
+    # Use Alpine variant for smaller image size
+    image: postgres:16-alpine
+    # ชื่อ container - ใช้ prefix "dev-" เพื่อแยกจาก production
+    # Container name - "dev-" prefix to distinguish from production
+    container_name: richpayment-dev-postgres
+    environment:
+      # ชื่อ database ที่สร้างตอน init / Database name created on init
+      POSTGRES_DB: richpayment
+      # Username สำหรับเชื่อมต่อ / Username for connection
+      POSTGRES_USER: richpayment
+      # Password สำหรับ dev (เปลี่ยนใน production!)
+      # Dev password (CHANGE IN PRODUCTION!)
+      POSTGRES_PASSWORD: richpayment_dev
+    ports:
+      # เปิด port 5432 ให้ host เข้าถึง - Go services บน host จะเชื่อมผ่าน localhost:5432
+      # Expose port 5432 to host - Go services on host connect via localhost:5432
+      - "5432:5432"
+    volumes:
+      # Persistent volume สำหรับ data - ไม่หายเมื่อ restart container
+      # Persistent volume for data - survives container restarts
+      - dev_postgres_data:/var/lib/postgresql/data
+      # Mount migration SQL files เพื่อ run ตอน first start (สร้าง schema อัตโนมัติ)
+      # Mount migration SQL files to run on first start (auto-create schema)
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      # ตรวจสอบว่า PostgreSQL พร้อมรับ connection หรือยัง
+      # Check if PostgreSQL is ready to accept connections
+      test: ["CMD-SHELL", "pg_isready -U richpayment"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # restart อัตโนมัติถ้า crash (สะดวกตอน dev)
+    # Auto-restart if crashed (convenient during dev)
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 - Cache, Session Store, และ Order Matching Queue
+  # Used for caching, session management, and pending order lookups
+  # เปิด port 6379 ให้ Go services บน host เชื่อมต่อได้
+  # Port 6379 exposed for Go services running on host to connect
+  # ---------------------------------------------------------------------------
+  redis:
+    # ใช้ Alpine variant เพราะขนาดเล็ก (~30MB)
+    # Use Alpine variant for smaller image size
+    image: redis:7-alpine
+    # ชื่อ container - ใช้ prefix "dev-"
+    # Container name - "dev-" prefix
+    container_name: richpayment-dev-redis
+    # เปิด requirepass เพื่อจำลอง production ให้ใกล้เคียง
+    # Enable password to simulate production-like setup
+    command: redis-server --requirepass richpayment_dev
+    ports:
+      # เปิด port 6379 ให้ host เข้าถึง - Go services เชื่อมผ่าน localhost:6379
+      # Expose port 6379 to host - Go services connect via localhost:6379
+      - "6379:6379"
+    volumes:
+      # Persistent volume สำหรับ RDB/AOF snapshots
+      # Persistent volume for RDB/AOF snapshots
+      - dev_redis_data:/data
+    healthcheck:
+      # ตรวจสอบว่า Redis ตอบ PONG หรือไม่
+      # Check if Redis responds with PONG
+      test: ["CMD", "redis-cli", "-a", "richpayment_dev", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # NATS JetStream - Message Broker สำหรับ Event-Driven Architecture
+  # Lightweight message broker for async communication between services
+  # เปิด port 4222 (client) และ 8222 (monitoring) ให้ host เข้าถึงได้
+  # Port 4222 (client) and 8222 (monitoring) exposed for host access
+  # ---------------------------------------------------------------------------
+  nats:
+    # ใช้ Alpine variant / Use Alpine variant
+    image: nats:2-alpine
+    # ชื่อ container - ใช้ prefix "dev-"
+    # Container name - "dev-" prefix
+    container_name: richpayment-dev-nats
+    # เปิด JetStream (-js) พร้อม persistent storage (-sd) และ monitoring (-m)
+    # Enable JetStream with persistent storage and monitoring endpoint
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      # NATS client port - Go services เชื่อมผ่าน localhost:4222
+      # NATS client port - Go services connect via localhost:4222
+      - "4222:4222"
+      # NATS monitoring HTTP endpoint - ดู server status ได้ที่ http://localhost:8222
+      # NATS monitoring - view server status at http://localhost:8222
+      - "8222:8222"
+    volumes:
+      # Persistent volume สำหรับ JetStream data (streams, consumers)
+      # Persistent volume for JetStream data (streams, consumers)
+      - dev_nats_data:/data
+    restart: unless-stopped
+
+# =============================================================================
+# Volumes - Persistent storage สำหรับ dev environment
+# ใช้ prefix "dev-" เพื่อแยกจาก production volumes
+# Persistent storage for dev environment
+# Uses "dev-" prefix to separate from production volumes
+# =============================================================================
+volumes:
+  # ข้อมูล PostgreSQL (tables, indexes, WAL logs)
+  # PostgreSQL data (tables, indexes, WAL logs)
+  dev_postgres_data:
+    name: richpayment-dev-postgres-data
+  # ข้อมูล Redis (RDB snapshots, AOF files)
+  # Redis data (RDB snapshots, AOF files)
+  dev_redis_data:
+    name: richpayment-dev-redis-data
+  # ข้อมูล NATS JetStream (streams, consumers, messages)
+  # NATS JetStream data (streams, consumers, messages)
+  dev_nats_data:
+    name: richpayment-dev-nats-data
