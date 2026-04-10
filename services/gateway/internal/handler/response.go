@@ -1,3 +1,6 @@
+// Package handler implements the HTTP request handlers for the gateway-api
+// service. Each handler group (deposits, withdrawals, wallet, health) exposes
+// methods that map to REST endpoints and delegate to the service layer.
 package handler
 
 import (
@@ -5,12 +8,17 @@ import (
 	"net/http"
 )
 
-// APIResponse is the standard envelope for all API responses.
+// APIResponse is the standard envelope for all API responses. Every endpoint
+// returns this structure so clients have a consistent shape to parse.
 type APIResponse struct {
-	Success bool   `json:"success"`
-	Data    any    `json:"data,omitempty"`
-	Error   string `json:"error,omitempty"`
-	Code    string `json:"code,omitempty"`
+	// Success is true when the request was handled without errors.
+	Success bool `json:"success"`
+	// Data carries the response payload on success; omitted on errors.
+	Data any `json:"data,omitempty"`
+	// Error is a human-readable error message; omitted on success.
+	Error string `json:"error,omitempty"`
+	// Code is a machine-readable error code; omitted on success.
+	Code string `json:"code,omitempty"`
 }
 
 // writeJSON marshals v as JSON and writes it with the given status code.

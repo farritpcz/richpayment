@@ -1,3 +1,6 @@
+// Package main is the entrypoint for the gateway-api service binary. It
+// initialises configuration, connects to Redis, builds the HTTP router with
+// all middleware and routes, and starts a graceful-shutdown-aware HTTP server.
 package main
 
 import (
@@ -16,6 +19,7 @@ import (
 	"github.com/farritpcz/richpayment/services/gateway/internal/router"
 )
 
+// main initialises all dependencies and starts the gateway-api HTTP server.
 func main() {
 	log := logger.Default()
 	log.Info("starting gateway-api service")

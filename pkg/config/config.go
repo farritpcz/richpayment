@@ -1,3 +1,7 @@
+// Package config provides helpers for reading typed configuration values from
+// environment variables with sensible defaults. It also defines configuration
+// structs for the external dependencies used across all RichPayment services
+// (PostgreSQL, Redis, NATS).
 package config
 
 import (
@@ -56,12 +60,19 @@ func GetDuration(key string, defaultVal time.Duration) time.Duration {
 
 // DatabaseConfig holds PostgreSQL connection configuration.
 type DatabaseConfig struct {
-	Host     string
-	Port     int
-	User     string
+	// Host is the database server hostname or IP address.
+	Host string
+	// Port is the TCP port the database listens on (default 5432).
+	Port int
+	// User is the database role used to authenticate.
+	User string
+	// Password is the authentication password for the database role.
 	Password string
-	DBName   string
-	SSLMode  string
+	// DBName is the name of the PostgreSQL database to connect to.
+	DBName string
+	// SSLMode controls the SSL negotiation mode (e.g. "disable", "require").
+	SSLMode string
+	// MaxConns is the maximum number of connections in the pool.
 	MaxConns int
 }
 
@@ -88,10 +99,14 @@ func LoadDatabaseConfig() *DatabaseConfig {
 
 // RedisConfig holds Redis connection configuration.
 type RedisConfig struct {
-	Host     string
-	Port     int
+	// Host is the Redis server hostname or IP address.
+	Host string
+	// Port is the TCP port Redis listens on (default 6379).
+	Port int
+	// Password is the Redis AUTH password (empty for no auth).
 	Password string
-	DB       int
+	// DB is the Redis database index (0-15).
+	DB int
 }
 
 // Addr returns the Redis address string.
@@ -111,7 +126,9 @@ func LoadRedisConfig() *RedisConfig {
 
 // NATSConfig holds NATS connection configuration.
 type NATSConfig struct {
-	URL   string
+	// URL is the NATS server URL (e.g. "nats://localhost:4222").
+	URL string
+	// Token is the authentication token for the NATS connection (empty for no auth).
 	Token string
 }
 

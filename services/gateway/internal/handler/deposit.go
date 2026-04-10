@@ -9,26 +9,41 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// CreateDepositRequest is the payload for creating a deposit order.
+// CreateDepositRequest is the JSON payload for creating a new deposit order.
 type CreateDepositRequest struct {
-	MerchantOrderID  string          `json:"merchant_order_id"`
-	CustomerName     string          `json:"customer_name"`
-	CustomerBankCode string          `json:"customer_bank_code"`
-	Amount           decimal.Decimal `json:"amount"`
-	Currency         string          `json:"currency"`
-	CallbackURL      string          `json:"callback_url"`
+	// MerchantOrderID is the merchant's own reference ID for idempotency.
+	MerchantOrderID string `json:"merchant_order_id"`
+	// CustomerName is the name of the end customer initiating the deposit.
+	CustomerName string `json:"customer_name"`
+	// CustomerBankCode identifies the customer's bank (e.g. "KBANK", "SCB").
+	CustomerBankCode string `json:"customer_bank_code"`
+	// Amount is the deposit amount; must be positive.
+	Amount decimal.Decimal `json:"amount"`
+	// Currency is the ISO 4217 currency code (e.g. "THB").
+	Currency string `json:"currency"`
+	// CallbackURL is the merchant's webhook endpoint for order status updates.
+	CallbackURL string `json:"callback_url"`
 }
 
-// DepositResponse is the API representation of a deposit order.
+// DepositResponse is the JSON representation of a deposit order returned by
+// the API.
 type DepositResponse struct {
-	ID              string          `json:"id"`
-	MerchantOrderID string          `json:"merchant_order_id"`
-	Amount          decimal.Decimal `json:"amount"`
-	Currency        string          `json:"currency"`
-	Status          string          `json:"status"`
-	QRPayload       string          `json:"qr_payload,omitempty"`
-	ExpiresAt       time.Time       `json:"expires_at"`
-	CreatedAt       time.Time       `json:"created_at"`
+	// ID is the platform-generated unique order identifier.
+	ID string `json:"id"`
+	// MerchantOrderID is the merchant's own reference echoed back.
+	MerchantOrderID string `json:"merchant_order_id"`
+	// Amount is the deposit amount.
+	Amount decimal.Decimal `json:"amount"`
+	// Currency is the ISO 4217 currency code.
+	Currency string `json:"currency"`
+	// Status is the current order status (e.g. "pending", "completed").
+	Status string `json:"status"`
+	// QRPayload is the PromptPay QR payload string, if applicable.
+	QRPayload string `json:"qr_payload,omitempty"`
+	// ExpiresAt is the deadline after which the order will expire.
+	ExpiresAt time.Time `json:"expires_at"`
+	// CreatedAt is when the order was created.
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // DepositHandler handles deposit-related API endpoints.

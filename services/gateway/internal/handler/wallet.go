@@ -6,12 +6,17 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// WalletBalanceResponse is the API representation of a wallet balance.
+// WalletBalanceResponse is the JSON representation of a wallet balance
+// returned by the API.
 type WalletBalanceResponse struct {
-	Currency    string          `json:"currency"`
-	Balance     decimal.Decimal `json:"balance"`
+	// Currency is the ISO 4217 currency code.
+	Currency string `json:"currency"`
+	// Balance is the total wallet balance including held funds.
+	Balance decimal.Decimal `json:"balance"`
+	// HoldBalance is the portion of the balance reserved for pending withdrawals.
 	HoldBalance decimal.Decimal `json:"hold_balance"`
-	Available   decimal.Decimal `json:"available"`
+	// Available is the spendable balance (Balance - HoldBalance).
+	Available decimal.Decimal `json:"available"`
 }
 
 // WalletHandler handles wallet-related API endpoints.

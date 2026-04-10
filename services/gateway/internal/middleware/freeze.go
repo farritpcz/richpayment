@@ -8,6 +8,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// emergencyFreezeKey is the Redis key that stores the emergency-freeze flag.
+// When the value is "1" or "true", all mutating API requests are rejected.
 const emergencyFreezeKey = "system:emergency_freeze"
 
 // FreezeCheck checks whether the system is in emergency freeze mode.

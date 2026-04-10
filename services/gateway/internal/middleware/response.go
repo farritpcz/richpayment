@@ -1,3 +1,6 @@
+// Package middleware provides reusable HTTP middleware for the gateway-api
+// service, including API key authentication, rate limiting, IP whitelisting,
+// emergency freeze checking, and session-based authentication.
 package middleware
 
 import (
@@ -5,11 +8,15 @@ import (
 	"net/http"
 )
 
-// errorResponse is the standard error envelope used by middleware.
+// errorResponse is the standard error envelope used by middleware to return
+// JSON error responses before the request reaches a handler.
 type errorResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error"`
-	Code    string `json:"code"`
+	// Success is always false for error responses.
+	Success bool `json:"success"`
+	// Error is a human-readable error message.
+	Error string `json:"error"`
+	// Code is a machine-readable error code for programmatic handling.
+	Code string `json:"code"`
 }
 
 // writeErrorJSON writes a JSON error response from middleware.

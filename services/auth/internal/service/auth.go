@@ -1,3 +1,7 @@
+// Package service contains the core business-logic layer for the auth service.
+// This file implements the AuthService which handles login (password + TOTP),
+// session creation/validation/destruction, and account-locking on repeated
+// failed login attempts.
 package service
 
 import (
@@ -15,17 +19,32 @@ import (
 )
 
 const (
+	// maxFailedAttempts is the number of consecutive incorrect login attempts
+	// allowed before the account is temporarily locked.
 	maxFailedAttempts = 5
-	lockDuration      = 15 * time.Minute
-	sessionTTL        = 24 * time.Hour
-	sessionPrefix     = "session:"
+
+	// lockDuration is how long an account stays locked after exceeding the
+	// maximum failed login attempts.
+	lockDuration = 15 * time.Minute
+
+	// sessionTTL is the Redis TTL for session keys, controlling how long a
+	// session remains valid without renewal.
+	sessionTTL = 24 * time.Hour
+
+	// sessionPrefix is the Redis key namespace for session data.
+	sessionPrefix = "session:"
 )
 
-// AuthService contains the core authentication business logic.
+// AuthService contains the core authentication business logic including
+// login with password + optional TOTP verification, session management in
+// Redis, and account-locking after excessive failed attempts.
 type AuthService struct {
-	repo  repository.AuthRepository
+	// repo provides data access for user lookup and failed-attempt tracking.
+	repo repository.AuthRepository
+	// redis is the Redis client used for session storage and retrieval.
 	redis *redis.Client
-	totp  *TOTPService
+	// totp handles TOTP code generation and validation for 2FA.
+	totp *TOTPService
 }
 
 // NewAuthService creates a new AuthService.

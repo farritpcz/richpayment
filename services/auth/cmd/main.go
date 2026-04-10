@@ -1,3 +1,7 @@
+// Package main is the entrypoint for the auth-service binary. It wires up
+// dependencies (Redis, repository, services, HTTP handler), starts an HTTP
+// server with graceful shutdown support, and listens for OS termination
+// signals.
 package main
 
 import (
@@ -17,6 +21,7 @@ import (
 	"github.com/farritpcz/richpayment/services/auth/internal/service"
 )
 
+// main initialises all dependencies and starts the auth-service HTTP server.
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
@@ -88,6 +93,8 @@ func main() {
 	log.Info("auth-service stopped")
 }
 
+// envOrDefault returns the value of the environment variable identified by key,
+// or fallback if the variable is empty or unset.
 func envOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

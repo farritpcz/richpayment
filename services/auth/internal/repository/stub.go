@@ -18,14 +18,17 @@ func NewStubRepository() *StubRepository {
 	return &StubRepository{}
 }
 
+// FindUserByEmail always returns nil, simulating "user not found".
 func (r *StubRepository) FindUserByEmail(_ context.Context, _ string, _ model.UserType) (*model.User, error) {
 	return nil, nil // no users in stub
 }
 
+// UpdateFailedAttempts is a no-op in the stub; it always succeeds.
 func (r *StubRepository) UpdateFailedAttempts(_ context.Context, _ uuid.UUID, _ model.UserType, _ int, _ *time.Time) error {
 	return nil
 }
 
+// ResetFailedAttempts is a no-op in the stub; it always succeeds.
 func (r *StubRepository) ResetFailedAttempts(_ context.Context, _ uuid.UUID, _ model.UserType) error {
 	return nil
 }

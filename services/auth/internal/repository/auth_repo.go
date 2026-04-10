@@ -1,3 +1,6 @@
+// Package repository defines the data-access interface for the auth service
+// and provides implementations (currently a stub; a PostgreSQL-backed
+// implementation will replace it in production).
 package repository
 
 import (

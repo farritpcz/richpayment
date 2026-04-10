@@ -8,7 +8,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// sessionCookieName is the name of the HTTP cookie that carries the session ID
+// for dashboard (admin) authentication.
 const sessionCookieName = "richpay_session"
+
+// sessionPrefix is the Redis key namespace for session data, matching the
+// prefix used by the auth service when storing sessions.
 const sessionPrefix = "session:"
 
 // SessionAuth validates dashboard sessions using a cookie backed by Redis.
@@ -49,8 +54,11 @@ func (sa *SessionAuth) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+// contextKey is an unexported type used as a key in context.WithValue to avoid
+// collisions with keys from other packages.
 type contextKey string
 
+// sessionContextKey is the context key under which session data is stored.
 const sessionContextKey contextKey = "session"
 
 // SessionFromContext retrieves session data stored by the SessionAuth middleware.

@@ -9,25 +9,39 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// CreateWithdrawalRequest is the payload for creating a withdrawal order.
+// CreateWithdrawalRequest is the JSON payload for creating a new withdrawal order.
 type CreateWithdrawalRequest struct {
-	MerchantOrderID    string          `json:"merchant_order_id"`
-	Amount             decimal.Decimal `json:"amount"`
-	Currency           string          `json:"currency"`
-	BeneficiaryName    string          `json:"beneficiary_name"`
-	BeneficiaryAccount string          `json:"beneficiary_account"`
-	BeneficiaryBank    string          `json:"beneficiary_bank"`
-	CallbackURL        string          `json:"callback_url"`
+	// MerchantOrderID is the merchant's own reference ID for idempotency.
+	MerchantOrderID string `json:"merchant_order_id"`
+	// Amount is the withdrawal amount; must be positive.
+	Amount decimal.Decimal `json:"amount"`
+	// Currency is the ISO 4217 currency code (e.g. "THB").
+	Currency string `json:"currency"`
+	// BeneficiaryName is the name of the person receiving the funds.
+	BeneficiaryName string `json:"beneficiary_name"`
+	// BeneficiaryAccount is the destination bank account number.
+	BeneficiaryAccount string `json:"beneficiary_account"`
+	// BeneficiaryBank is the destination bank code or name.
+	BeneficiaryBank string `json:"beneficiary_bank"`
+	// CallbackURL is the merchant's webhook endpoint for status updates.
+	CallbackURL string `json:"callback_url"`
 }
 
-// WithdrawalResponse is the API representation of a withdrawal order.
+// WithdrawalResponse is the JSON representation of a withdrawal order returned
+// by the API.
 type WithdrawalResponse struct {
-	ID              string          `json:"id"`
-	MerchantOrderID string          `json:"merchant_order_id"`
-	Amount          decimal.Decimal `json:"amount"`
-	Currency        string          `json:"currency"`
-	Status          string          `json:"status"`
-	CreatedAt       time.Time       `json:"created_at"`
+	// ID is the platform-generated unique withdrawal identifier.
+	ID string `json:"id"`
+	// MerchantOrderID is the merchant's own reference echoed back.
+	MerchantOrderID string `json:"merchant_order_id"`
+	// Amount is the withdrawal amount.
+	Amount decimal.Decimal `json:"amount"`
+	// Currency is the ISO 4217 currency code.
+	Currency string `json:"currency"`
+	// Status is the current withdrawal status (e.g. "pending", "approved").
+	Status string `json:"status"`
+	// CreatedAt is when the withdrawal was created.
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // WithdrawalHandler handles withdrawal-related API endpoints.

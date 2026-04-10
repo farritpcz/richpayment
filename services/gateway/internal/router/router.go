@@ -1,3 +1,5 @@
+// Package router wires together all HTTP routes, handlers, and middleware for
+// the gateway-api service into a single http.Handler ready to serve.
 package router
 
 import (
