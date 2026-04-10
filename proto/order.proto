@@ -1,0 +1,339 @@
+// =============================================================================
+// order.proto — OrderService gRPC definitions for the RichPayment platform.
+//
+// The OrderService manages the complete deposit order lifecycle: creation
+// with bank account selection and QR code generation, SMS-based matching,
+// and completion with settlement (wallet credit + commission recording).
+//
+// Inter-service communication on completion:
+//   order-service -> wallet-service (credit merchant wallet)
+//   order-service -> commission-service (record fee split)
+//   order-service -> notification-service (deliver merchant webhook)
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+import "google/protobuf/timestamp.proto";
+import "proto/common.proto";
+
+// =============================================================================
+// OrderService — RPC definitions for deposit order management.
+// =============================================================================
+
+// OrderService provides deposit order lifecycle operations. Merchants create
+// deposit orders via the gateway, and the system automatically matches
+// incoming bank transfers (via SMS/email/slip) to pending orders.
+//
+// Deposit lifecycle:
+//   1. Merchant calls CreateDeposit with amount and customer info.
+//   2. System selects a bank account, adjusts the amount for uniqueness,
+//      generates a QR code, and returns the order with payment instructions.
+//   3. Customer transfers money to the assigned bank account.
+//   4. SMS/email arrives, parser-service calls MatchDeposit to match.
+//   5. On match, CompleteDeposit is called to settle: credit wallet,
+//      record commission, notify merchant.
+//   6. If no match within the expiry window, order expires automatically.
+service OrderService {
+  // CreateDeposit creates a new deposit order. The system selects an
+  // available bank account from the pool, adjusts the amount for unique
+  // matching, generates a PromptPay QR code, and persists the order.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing required fields or invalid amount.
+  //   - UNAVAILABLE: no bank accounts available in the pool.
+  rpc CreateDeposit(CreateDepositRequest) returns (DepositOrder);
+
+  // GetDeposit retrieves a single deposit order by its UUID.
+  // Returns the full order state including matched/completed information.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no order exists with the given ID.
+  //   - INVALID_ARGUMENT: invalid UUID format.
+  rpc GetDeposit(GetDepositRequest) returns (DepositOrder);
+
+  // MatchDeposit attempts to match an incoming bank transaction (from SMS
+  // parsing) to a pending deposit order. If a match is found, the order
+  // status transitions to "matched".
+  //
+  // This RPC is called internally by the parser-service when it successfully
+  // extracts a bank code and amount from an incoming SMS.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no pending order matches the given criteria.
+  rpc MatchDeposit(MatchDepositRequest) returns (MatchDepositResponse);
+
+  // CompleteDeposit finalises a matched deposit order. It credits the
+  // merchant's wallet with the net amount (after fees), records the
+  // commission split, and triggers webhook notification to the merchant.
+  //
+  // This is an internal RPC called after a deposit is matched and verified.
+  //
+  // Error codes:
+  //   - NOT_FOUND: order not found.
+  //   - FAILED_PRECONDITION: order is not in "matched" status.
+  //   - INTERNAL: wallet credit or commission recording failed.
+  rpc CompleteDeposit(CompleteDepositRequest) returns (CompleteDepositResponse);
+}
+
+// =============================================================================
+// OrderStatus — lifecycle states for deposit orders.
+// =============================================================================
+
+// OrderStatus represents the lifecycle state of a deposit order as it
+// moves through creation, matching, and settlement.
+enum OrderStatus {
+  // ORDER_STATUS_UNSPECIFIED is the default zero value. Must not be used.
+  ORDER_STATUS_UNSPECIFIED = 0;
+
+  // ORDER_STATUS_PENDING means the order is waiting for a matching bank
+  // transaction (via SMS, email notification, or uploaded slip).
+  ORDER_STATUS_PENDING = 1;
+
+  // ORDER_STATUS_MATCHED means an incoming bank transaction has been matched
+  // to this order but settlement (wallet credit) has not yet completed.
+  ORDER_STATUS_MATCHED = 2;
+
+  // ORDER_STATUS_COMPLETED means the deposit has been fully settled:
+  // the merchant's wallet has been credited and the webhook delivered.
+  ORDER_STATUS_COMPLETED = 3;
+
+  // ORDER_STATUS_EXPIRED means the order passed its expiry deadline
+  // without being matched and is no longer valid for matching.
+  ORDER_STATUS_EXPIRED = 4;
+
+  // ORDER_STATUS_FAILED means processing failed after matching (e.g.
+  // a wallet credit error). Manual intervention may be required.
+  ORDER_STATUS_FAILED = 5;
+
+  // ORDER_STATUS_CANCELLED means the order was explicitly cancelled
+  // before matching, either by the merchant or an admin.
+  ORDER_STATUS_CANCELLED = 6;
+}
+
+// =============================================================================
+// MatchedBy — channel through which a deposit was matched.
+// =============================================================================
+
+// MatchedBy indicates the channel through which an incoming bank transaction
+// was detected and matched to a deposit order.
+enum MatchedBy {
+  // MATCHED_BY_UNSPECIFIED is the default zero value. Used when the order
+  // has not been matched yet.
+  MATCHED_BY_UNSPECIFIED = 0;
+
+  // MATCHED_BY_SMS means the deposit was matched via an incoming SMS
+  // notification from the bank (parsed by the parser-service).
+  MATCHED_BY_SMS = 1;
+
+  // MATCHED_BY_EMAIL means the deposit was matched via an incoming
+  // email notification from the bank.
+  MATCHED_BY_EMAIL = 2;
+
+  // MATCHED_BY_SLIP means the deposit was matched via a bank-transfer
+  // slip (image) uploaded by the customer or operator via Telegram.
+  MATCHED_BY_SLIP = 3;
+}
+
+// =============================================================================
+// DepositOrder — the full deposit order message.
+// =============================================================================
+
+// DepositOrder represents a single deposit transaction in the system.
+// A merchant creates a deposit order, and the system waits for an incoming
+// bank transfer that matches the order's amount.
+message DepositOrder {
+  // id is the unique identifier for this deposit order (UUID v4 string).
+  string id = 1;
+
+  // merchant_id is the UUID of the merchant that created the order.
+  string merchant_id = 2;
+
+  // merchant_order_id is the merchant's own reference for this transaction,
+  // used for idempotency and reconciliation on the merchant side.
+  string merchant_order_id = 3;
+
+  // customer_name is the name provided by the end customer making the deposit.
+  string customer_name = 4;
+
+  // customer_bank_code identifies the customer's bank (e.g. "KBANK", "SCB").
+  string customer_bank_code = 5;
+
+  // requested_amount is the original amount the merchant requested.
+  // Stored as a decimal string for precision.
+  string requested_amount = 6;
+
+  // adjusted_amount is the amount after small adjustment for unique matching
+  // (e.g. adding satangs to make the transfer amount unique among pending orders).
+  string adjusted_amount = 7;
+
+  // actual_amount is the amount actually received from the bank transaction.
+  // May differ slightly from adjusted_amount due to bank rounding.
+  // Empty string until the order is matched.
+  string actual_amount = 8;
+
+  // fee_amount is the platform fee charged on this deposit, calculated as
+  // actual_amount * merchant's deposit fee percentage.
+  // Empty string until the order is completed.
+  string fee_amount = 9;
+
+  // net_amount is the amount credited to the merchant's wallet after
+  // subtracting the fee: net_amount = actual_amount - fee_amount.
+  // Empty string until the order is completed.
+  string net_amount = 10;
+
+  // currency is the ISO 4217 currency code (e.g. "THB").
+  string currency = 11;
+
+  // bank_account_id is the UUID of the platform's receiving bank account
+  // that was assigned to this deposit order for the customer to transfer to.
+  string bank_account_id = 12;
+
+  // matched_by indicates how the incoming transaction was detected.
+  // MATCHED_BY_UNSPECIFIED while the order is still pending.
+  MatchedBy matched_by = 13;
+
+  // matched_at is the timestamp when the order was matched to an incoming
+  // bank transaction. Not set while the order is pending.
+  google.protobuf.Timestamp matched_at = 14;
+
+  // status is the current lifecycle state of the order.
+  OrderStatus status = 15;
+
+  // qr_payload contains the PromptPay QR code payload string that the
+  // customer can scan to initiate the transfer. Empty if QR is not used.
+  string qr_payload = 16;
+
+  // webhook_sent indicates whether the merchant's callback URL has been
+  // successfully notified of the order's final status.
+  bool webhook_sent = 17;
+
+  // webhook_attempts tracks how many times the system has tried to deliver
+  // the webhook notification (for retry logic).
+  int32 webhook_attempts = 18;
+
+  // expires_at is the deadline after which the order will be marked as
+  // expired if no matching transaction has been found.
+  google.protobuf.Timestamp expires_at = 19;
+
+  // created_at is when the order was created (UTC).
+  google.protobuf.Timestamp created_at = 20;
+
+  // updated_at is when the order was last modified (UTC).
+  google.protobuf.Timestamp updated_at = 21;
+}
+
+// =============================================================================
+// CreateDeposit messages
+// =============================================================================
+
+// CreateDepositRequest contains all fields required to create a new deposit.
+message CreateDepositRequest {
+  // merchant_id is the UUID of the merchant creating the deposit.
+  // Required field — must be a valid UUID string.
+  string merchant_id = 1;
+
+  // merchant_order_id is the merchant's own reference ID for idempotency.
+  // Required field — must not be empty.
+  string merchant_order_id = 2;
+
+  // customer_name is the name of the end customer initiating the deposit.
+  // Used for matching verification and display purposes.
+  string customer_name = 3;
+
+  // customer_bank_code identifies the customer's bank (e.g. "KBANK", "SCB").
+  // Used to select a compatible receiving bank account from the pool.
+  string customer_bank_code = 4;
+
+  // amount is the deposit amount as a Money message.
+  // The amount must be positive.
+  // Required field.
+  Money amount = 5;
+
+  // callback_url is the merchant's webhook endpoint for order status updates.
+  // When the order is completed or expires, a signed POST request is sent here.
+  string callback_url = 6;
+}
+
+// =============================================================================
+// GetDeposit messages
+// =============================================================================
+
+// GetDepositRequest identifies the deposit order to retrieve.
+message GetDepositRequest {
+  // id is the UUID of the deposit order to retrieve.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+}
+
+// =============================================================================
+// MatchDeposit messages
+// =============================================================================
+
+// MatchDepositRequest carries the data extracted from an incoming bank
+// notification (SMS/email/slip) to find a matching pending order.
+message MatchDepositRequest {
+  // bank_account_id is the UUID of the platform bank account that received
+  // the transfer. Used to narrow the search to orders assigned to this account.
+  string bank_account_id = 1;
+
+  // amount is the transfer amount detected in the bank notification.
+  // Stored as a decimal string for precision.
+  string amount = 2;
+
+  // bank_code is the bank identifier extracted from the notification
+  // (e.g. "KBANK", "SCB").
+  string bank_code = 3;
+
+  // matched_by indicates the channel that detected this transaction.
+  MatchedBy matched_by = 4;
+
+  // sms_id is the UUID of the SMS record in the parser-service database.
+  // Used for audit trail linking. Empty if not matched via SMS.
+  string sms_id = 5;
+}
+
+// MatchDepositResponse contains the result of the matching attempt.
+message MatchDepositResponse {
+  // matched indicates whether a pending order was found and matched.
+  bool matched = 1;
+
+  // order_id is the UUID of the matched order. Empty if no match was found.
+  string order_id = 2;
+
+  // message is a human-readable description of the matching outcome.
+  string message = 3;
+}
+
+// =============================================================================
+// CompleteDeposit messages
+// =============================================================================
+
+// CompleteDepositRequest triggers the settlement flow for a matched deposit.
+message CompleteDepositRequest {
+  // order_id is the UUID of the deposit order to complete.
+  // The order must be in "matched" status.
+  // Required field — must be a valid UUID string.
+  string order_id = 1;
+}
+
+// CompleteDepositResponse confirms successful completion of the deposit.
+message CompleteDepositResponse {
+  // status is the final order status, typically "completed".
+  string status = 1;
+
+  // net_amount is the amount credited to the merchant's wallet after fees.
+  // Stored as a decimal string.
+  string net_amount = 2;
+
+  // fee_amount is the platform fee deducted from the deposit.
+  // Stored as a decimal string.
+  string fee_amount = 3;
+
+  // message is a human-readable confirmation message.
+  string message = 4;
+}

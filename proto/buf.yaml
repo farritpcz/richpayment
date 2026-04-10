@@ -1,0 +1,54 @@
+# =============================================================================
+# buf.yaml — Buf configuration for the RichPayment gRPC proto definitions.
+#
+# This file configures the Buf CLI for linting, breaking change detection,
+# and code generation of the RichPayment protobuf definitions. Buf provides
+# a modern workflow for working with Protocol Buffers, replacing the
+# traditional protoc compiler with a faster, more ergonomic tool.
+#
+# Usage:
+#   buf lint          — Lint all .proto files for style and correctness.
+#   buf breaking      — Check for breaking changes against a reference.
+#   buf generate      — Generate Go code from .proto files.
+#   buf build         — Build and validate the protobuf module.
+#
+# For more information: https://buf.build/docs/
+# =============================================================================
+version: v2
+
+# =============================================================================
+# modules — defines the protobuf modules in this workspace.
+# =============================================================================
+#
+# Each module represents a set of .proto files that are compiled together.
+# The RichPayment platform uses a single module rooted at the repository
+# root, with all .proto files located in the proto/ directory.
+modules:
+  - path: proto
+
+# =============================================================================
+# lint — configures the linting rules for protobuf style enforcement.
+# =============================================================================
+#
+# Linting ensures that all .proto files follow consistent naming conventions,
+# comment requirements, and structural patterns. The DEFAULT ruleset covers
+# the most common best practices recommended by the Buf team.
+lint:
+  use:
+    - STANDARD
+  except:
+    # PACKAGE_VERSION_SUFFIX requires packages to end with a version suffix
+    # like "v1". Our package "richpayment.v1" already contains the version
+    # in a non-suffix position, so we disable this specific check.
+    - PACKAGE_VERSION_SUFFIX
+
+# =============================================================================
+# breaking — configures breaking change detection rules.
+# =============================================================================
+#
+# Breaking change detection prevents accidental removal or modification of
+# fields, messages, enums, and RPCs that would break existing clients.
+# The FILE ruleset checks for wire-incompatible changes within each file.
+breaking:
+  use:
+    - FILE

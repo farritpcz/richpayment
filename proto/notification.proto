@@ -1,0 +1,166 @@
+// =============================================================================
+// notification.proto — NotificationService gRPC definitions for the
+// RichPayment platform.
+//
+// The NotificationService handles outbound notifications from the platform
+// to external recipients. It provides two primary notification channels:
+//
+//   1. Webhook delivery: sends signed HTTP POST requests to merchant callback
+//      URLs when deposit/withdrawal orders reach terminal states (completed,
+//      expired, failed). Includes HMAC-SHA256 signature verification and
+//      automatic retry with exponential backoff.
+//
+//   2. Alert delivery: sends Telegram messages for security events and
+//      operational alerts to the platform's admin/ops Telegram channels.
+//
+// Inter-service communication:
+//   order-service      -> notification-service (webhook on deposit completion)
+//   withdrawal-service -> notification-service (webhook on withdrawal update)
+//   auth-service       -> notification-service (security alert on login failure)
+//   bank-service       -> notification-service (alert on account limit reached)
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+// =============================================================================
+// NotificationService — RPC definitions for outbound notifications.
+// =============================================================================
+
+// NotificationService provides outbound notification delivery for the
+// RichPayment platform. It abstracts the complexity of webhook signing,
+// retry logic, and Telegram API interaction behind a simple gRPC interface
+// that other services can call when they need to notify external parties.
+//
+// Webhook delivery:
+//   - Payloads are signed with HMAC-SHA256 using the merchant's webhook secret.
+//   - Failed deliveries are retried with exponential backoff (up to 5 attempts).
+//   - Delivery status is tracked for monitoring and debugging.
+//
+// Alert delivery:
+//   - Plain text alerts to any Telegram chat ID.
+//   - Formatted security alerts with severity and event details.
+service NotificationService {
+  // SendWebhook delivers a signed webhook payload to a merchant's callback
+  // URL. The payload is signed with HMAC-SHA256 using the merchant's
+  // webhook secret, and the signature is included in the X-Signature header.
+  //
+  // If the initial delivery fails (non-2xx response or timeout), the
+  // webhook is scheduled for retry with exponential backoff. The RPC
+  // returns success (with status "retry_scheduled") even when the first
+  // attempt fails, since the webhook will be retried asynchronously.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing required fields (merchant_id, order_id,
+  //     webhook_url, webhook_secret, or payload).
+  //   - INTERNAL: unexpected infrastructure failure.
+  rpc SendWebhook(SendWebhookRequest) returns (SendWebhookResponse);
+
+  // SendAlert sends a notification message via Telegram. Supports two modes:
+  //
+  //   1. Plain alert: sends a text message to a specific Telegram chat ID.
+  //      Requires chat_id and message fields.
+  //
+  //   2. Security alert: sends a formatted security alert to the admin group.
+  //      Requires event and details fields. The message is automatically
+  //      formatted with severity, timestamp, and event metadata.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing required fields (either chat_id+message
+  //     for plain alerts, or event+details for security alerts).
+  //   - INTERNAL: Telegram API call failed.
+  rpc SendAlert(SendAlertRequest) returns (SendAlertResponse);
+}
+
+// =============================================================================
+// SendWebhook messages
+// =============================================================================
+
+// SendWebhookRequest contains all the information needed to deliver a
+// signed webhook to a merchant's callback URL.
+message SendWebhookRequest {
+  // merchant_id is the UUID of the merchant that should receive the webhook.
+  // Used for logging, tracking, and associating the delivery with the
+  // correct merchant record.
+  // Required field — must not be empty.
+  string merchant_id = 1;
+
+  // order_id is the UUID of the payment order that triggered this
+  // notification. Used for deduplication and audit trail linking.
+  // Required field — must not be empty.
+  string order_id = 2;
+
+  // webhook_url is the merchant-configured HTTPS callback endpoint where
+  // the payload should be delivered via POST request.
+  // Required field — must be a valid HTTPS URL.
+  string webhook_url = 3;
+
+  // webhook_secret is the shared HMAC-SHA256 key used to sign the payload.
+  // The resulting signature is included in the X-Signature request header
+  // so the merchant can verify the payload's authenticity and integrity.
+  // Required field — must not be empty.
+  string webhook_secret = 4;
+
+  // payload is the JSON body that will be delivered to the merchant. This
+  // is the raw content of the webhook — typically containing order status,
+  // amounts, and timestamps.
+  // Required field — must be a valid JSON string.
+  string payload = 5;
+}
+
+// SendWebhookResponse contains the delivery outcome.
+message SendWebhookResponse {
+  // status indicates the delivery outcome. Possible values:
+  //   - "delivered": webhook was delivered successfully on the first attempt.
+  //   - "retry_scheduled": first attempt failed, retries have been scheduled
+  //     with exponential backoff.
+  string status = 1;
+
+  // message is a human-readable description of the delivery outcome.
+  string message = 2;
+}
+
+// =============================================================================
+// SendAlert messages
+// =============================================================================
+
+// SendAlertRequest specifies the target Telegram chat and the message content.
+// It supports two modes: plain alerts (chat_id + message) and security alerts
+// (event + details).
+message SendAlertRequest {
+  // chat_id is the Telegram chat ID where the alert should be sent.
+  // Can be a numeric ID (e.g. "-1001234567890") or a @channel username.
+  // Required for plain alerts. Ignored for security alerts (which are
+  // routed to the pre-configured admin group).
+  string chat_id = 1;
+
+  // message is the text content of the alert to be sent. Used for plain
+  // alerts. Required when event is not set.
+  string message = 2;
+
+  // event is the security event type (e.g. "login_failed",
+  // "emergency_freeze", "sms_spoofing", "daily_limit_reached"). When set,
+  // the alert is formatted as a structured security alert with severity
+  // and routed to the admin alert group.
+  // Optional — if empty, the request is treated as a plain alert.
+  string event = 3;
+
+  // details is additional context for security alerts. Provides extra
+  // information about the event such as IP address, user email, affected
+  // account, etc. Only used when event is specified.
+  // Optional — can be empty even when event is set.
+  string details = 4;
+}
+
+// SendAlertResponse confirms that the alert was sent to Telegram.
+message SendAlertResponse {
+  // status indicates the delivery outcome, typically "sent".
+  string status = 1;
+
+  // message is a human-readable confirmation message.
+  string message = 2;
+}

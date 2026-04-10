@@ -1,0 +1,692 @@
+// =============================================================================
+// user.proto — UserService gRPC definitions for the RichPayment platform.
+//
+// The UserService manages CRUD operations for all actor types in the system:
+// admins, merchants, agents, and partners. Each actor type has its own set
+// of fields and status lifecycle.
+//
+// Actor hierarchy: Partner -> Agent -> Merchant
+// Admins are independent back-office users who manage the entire platform.
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+import "google/protobuf/timestamp.proto";
+import "proto/common.proto";
+
+// =============================================================================
+// UserService — RPC definitions for user management.
+// =============================================================================
+
+// UserService provides CRUD operations for all actor types in the
+// RichPayment platform. Each entity (admin, merchant, agent, partner)
+// has create, get, list, and update RPCs.
+//
+// The merchant entity additionally supports API key revocation and rotation,
+// which is a security-sensitive operation requiring TOTP verification.
+service UserService {
+  // ---------------------------------------------------------------------------
+  // Admin RPCs
+  // ---------------------------------------------------------------------------
+
+  // CreateAdmin creates a new back-office administrator account.
+  // The password is hashed server-side using bcrypt before storage.
+  //
+  // Error codes:
+  //   - ALREADY_EXISTS: an admin with the same email already exists.
+  //   - INVALID_ARGUMENT: missing required fields.
+  rpc CreateAdmin(CreateAdminRequest) returns (Admin);
+
+  // GetAdmin retrieves a single admin by their UUID.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no admin exists with the given ID.
+  //   - INVALID_ARGUMENT: invalid UUID format.
+  rpc GetAdmin(GetAdminRequest) returns (Admin);
+
+  // ListAdmins returns a paginated list of all admin accounts.
+  // Results are ordered by creation time (newest first).
+  rpc ListAdmins(ListAdminsRequest) returns (ListAdminsResponse);
+
+  // UpdateAdmin performs a partial update on an existing admin account.
+  // Only the fields explicitly provided in the request are modified.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no admin exists with the given ID.
+  //   - INVALID_ARGUMENT: invalid UUID or field values.
+  rpc UpdateAdmin(UpdateAdminRequest) returns (UpdateAdminResponse);
+
+  // ---------------------------------------------------------------------------
+  // Merchant RPCs
+  // ---------------------------------------------------------------------------
+
+  // CreateMerchant creates a new merchant account with a generated API key.
+  // The raw API key is returned ONLY in the creation response — it cannot
+  // be retrieved later. The caller must store it securely.
+  //
+  // Error codes:
+  //   - ALREADY_EXISTS: a merchant with the same email already exists.
+  //   - INVALID_ARGUMENT: missing required fields or invalid fee percentages.
+  rpc CreateMerchant(CreateMerchantRequest) returns (CreateMerchantResponse);
+
+  // GetMerchant retrieves a single merchant by their UUID.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no merchant exists with the given ID.
+  rpc GetMerchant(GetMerchantRequest) returns (Merchant);
+
+  // ListMerchants returns a paginated list of merchants, optionally filtered
+  // by agent_id to show only merchants managed by a specific agent.
+  rpc ListMerchants(ListMerchantsRequest) returns (ListMerchantsResponse);
+
+  // UpdateMerchant performs a partial update on an existing merchant.
+  // Only the fields explicitly provided in the request are modified.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no merchant exists with the given ID.
+  rpc UpdateMerchant(UpdateMerchantRequest) returns (UpdateMerchantResponse);
+
+  // RevokeAPIKey rotates a merchant's API key. The old key is invalidated
+  // and a new one is generated. Requires TOTP verification for security.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no merchant exists with the given ID.
+  //   - PERMISSION_DENIED: invalid TOTP code.
+  rpc RevokeAPIKey(RevokeAPIKeyRequest) returns (RevokeAPIKeyResponse);
+
+  // ---------------------------------------------------------------------------
+  // Agent RPCs
+  // ---------------------------------------------------------------------------
+
+  // CreateAgent creates a new agent account. The agent's password is hashed
+  // server-side using bcrypt before storage.
+  //
+  // Error codes:
+  //   - ALREADY_EXISTS: an agent with the same email already exists.
+  //   - INVALID_ARGUMENT: missing required fields.
+  rpc CreateAgent(CreateAgentRequest) returns (Agent);
+
+  // GetAgent retrieves a single agent by their UUID.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no agent exists with the given ID.
+  rpc GetAgent(GetAgentRequest) returns (Agent);
+
+  // ListAgents returns a paginated list of agents, optionally filtered
+  // by partner_id to show only agents managed by a specific partner.
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+
+  // UpdateAgent performs a partial update on an existing agent account.
+  // Only the fields explicitly provided in the request are modified.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no agent exists with the given ID.
+  rpc UpdateAgent(UpdateAgentRequest) returns (UpdateAgentResponse);
+
+  // ---------------------------------------------------------------------------
+  // Partner RPCs
+  // ---------------------------------------------------------------------------
+
+  // CreatePartner creates a new partner account. The partner's password
+  // is hashed server-side using bcrypt before storage.
+  //
+  // Error codes:
+  //   - ALREADY_EXISTS: a partner with the same email already exists.
+  //   - INVALID_ARGUMENT: missing required fields.
+  rpc CreatePartner(CreatePartnerRequest) returns (Partner);
+
+  // GetPartner retrieves a single partner by their UUID.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no partner exists with the given ID.
+  rpc GetPartner(GetPartnerRequest) returns (Partner);
+
+  // ListPartners returns a paginated list of all partner accounts.
+  rpc ListPartners(ListPartnersRequest) returns (ListPartnersResponse);
+
+  // UpdatePartner performs a partial update on an existing partner account.
+  // Only the fields explicitly provided in the request are modified.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no partner exists with the given ID.
+  rpc UpdatePartner(UpdatePartnerRequest) returns (UpdatePartnerResponse);
+}
+
+// =============================================================================
+// Status enums for each actor type.
+// =============================================================================
+
+// AdminStatus represents the lifecycle state of an admin account.
+// Admins progress through these states based on administrative actions.
+enum AdminStatus {
+  // ADMIN_STATUS_UNSPECIFIED is the default zero value. Must not be used.
+  ADMIN_STATUS_UNSPECIFIED = 0;
+
+  // ADMIN_STATUS_ACTIVE means the admin can log in and perform actions.
+  ADMIN_STATUS_ACTIVE = 1;
+
+  // ADMIN_STATUS_SUSPENDED means the admin is temporarily blocked from
+  // logging in. An admin can be suspended for security reasons.
+  ADMIN_STATUS_SUSPENDED = 2;
+
+  // ADMIN_STATUS_DELETED means the admin has been soft-deleted. The record
+  // is retained for audit purposes but the account is permanently disabled.
+  ADMIN_STATUS_DELETED = 3;
+}
+
+// MerchantStatus represents the lifecycle state of a merchant account.
+// Merchants begin as pending and move to active after approval.
+enum MerchantStatus {
+  // MERCHANT_STATUS_UNSPECIFIED is the default zero value. Must not be used.
+  MERCHANT_STATUS_UNSPECIFIED = 0;
+
+  // MERCHANT_STATUS_PENDING means the merchant is awaiting admin approval.
+  // Pending merchants cannot process transactions.
+  MERCHANT_STATUS_PENDING = 1;
+
+  // MERCHANT_STATUS_ACTIVE means the merchant can process deposit and
+  // withdrawal transactions through the platform.
+  MERCHANT_STATUS_ACTIVE = 2;
+
+  // MERCHANT_STATUS_SUSPENDED means the merchant is temporarily blocked
+  // from processing transactions.
+  MERCHANT_STATUS_SUSPENDED = 3;
+
+  // MERCHANT_STATUS_DELETED means the merchant has been soft-deleted.
+  MERCHANT_STATUS_DELETED = 4;
+}
+
+// AgentStatus represents the lifecycle state of an agent account.
+enum AgentStatus {
+  // AGENT_STATUS_UNSPECIFIED is the default zero value. Must not be used.
+  AGENT_STATUS_UNSPECIFIED = 0;
+
+  // AGENT_STATUS_ACTIVE means the agent is operational and can manage
+  // merchants in their portfolio.
+  AGENT_STATUS_ACTIVE = 1;
+
+  // AGENT_STATUS_SUSPENDED means the agent is temporarily blocked.
+  AGENT_STATUS_SUSPENDED = 2;
+
+  // AGENT_STATUS_DELETED means the agent has been soft-deleted.
+  AGENT_STATUS_DELETED = 3;
+}
+
+// PartnerStatus represents the lifecycle state of a partner account.
+enum PartnerStatus {
+  // PARTNER_STATUS_UNSPECIFIED is the default zero value. Must not be used.
+  PARTNER_STATUS_UNSPECIFIED = 0;
+
+  // PARTNER_STATUS_ACTIVE means the partner is operational and can manage
+  // agents in their network.
+  PARTNER_STATUS_ACTIVE = 1;
+
+  // PARTNER_STATUS_SUSPENDED means the partner is temporarily blocked.
+  PARTNER_STATUS_SUSPENDED = 2;
+
+  // PARTNER_STATUS_DELETED means the partner has been soft-deleted.
+  PARTNER_STATUS_DELETED = 3;
+}
+
+// =============================================================================
+// Admin messages
+// =============================================================================
+
+// Admin represents a back-office administrator in the RichPayment system.
+// Admins manage merchants, agents, partners, and system configuration.
+message Admin {
+  // id is the unique identifier for the admin (UUID v4 string).
+  string id = 1;
+
+  // email is the admin's login email address. Unique across all admins.
+  string email = 2;
+
+  // display_name is the human-readable name shown in the admin dashboard.
+  string display_name = 3;
+
+  // role_mask is a bitmask of permissions. Each bit represents a specific
+  // capability (e.g. bit 0 = view merchants, bit 1 = manage merchants).
+  int64 role_mask = 4;
+
+  // status indicates whether the admin account is active, suspended, or deleted.
+  AdminStatus status = 5;
+
+  // created_at is the timestamp when the admin account was created (UTC).
+  google.protobuf.Timestamp created_at = 6;
+
+  // updated_at is the timestamp when the admin account was last modified (UTC).
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// CreateAdminRequest contains all fields required to create a new admin.
+message CreateAdminRequest {
+  // email is the admin's login email address. Must be unique.
+  // Required field — must not be empty.
+  string email = 1;
+
+  // password is the plaintext password. Will be hashed server-side via bcrypt.
+  // Required field — must not be empty. Minimum 8 characters recommended.
+  string password = 2;
+
+  // display_name is the human-readable name shown in the admin dashboard.
+  // Required field — must not be empty.
+  string display_name = 3;
+
+  // role_mask is the bitmask of permissions for this admin.
+  // Required field — must be greater than 0.
+  int64 role_mask = 4;
+}
+
+// GetAdminRequest identifies the admin to retrieve.
+message GetAdminRequest {
+  // id is the UUID of the admin to retrieve.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+}
+
+// ListAdminsRequest carries pagination parameters for listing admins.
+message ListAdminsRequest {
+  // pagination contains the page number and page size.
+  PaginationRequest pagination = 1;
+}
+
+// ListAdminsResponse contains the paginated list of admins.
+message ListAdminsResponse {
+  // admins is the list of admin records for the requested page.
+  repeated Admin admins = 1;
+
+  // pagination contains metadata about the total count and current page.
+  PaginationResponse pagination = 2;
+}
+
+// UpdateAdminRequest performs a partial update on an admin account.
+// Only fields that are explicitly set (non-default values) will be updated.
+// Uses optional fields so that only provided fields are modified.
+message UpdateAdminRequest {
+  // id is the UUID of the admin to update.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+
+  // display_name is the new display name. Omit to leave unchanged.
+  optional string display_name = 2;
+
+  // role_mask is the new role bitmask. Omit to leave unchanged.
+  optional int64 role_mask = 3;
+
+  // status is the new status. Omit to leave unchanged.
+  optional AdminStatus status = 4;
+
+  // email is the new email address. Omit to leave unchanged.
+  optional string email = 5;
+}
+
+// UpdateAdminResponse confirms that the admin was updated successfully.
+message UpdateAdminResponse {
+  // status is a confirmation string, typically "updated".
+  string status = 1;
+}
+
+// =============================================================================
+// Merchant messages
+// =============================================================================
+
+// Merchant represents a payment-accepting business in the RichPayment system.
+// Each merchant has an API key for authentication and configurable fee
+// percentages for deposits and withdrawals.
+message Merchant {
+  // id is the unique identifier for the merchant (UUID v4 string).
+  string id = 1;
+
+  // name is the merchant's business name.
+  string name = 2;
+
+  // email is the merchant's contact email address.
+  string email = 3;
+
+  // webhook_url is the merchant's callback endpoint for order notifications.
+  // Must be a valid HTTPS URL.
+  string webhook_url = 4;
+
+  // agent_id is the UUID of the agent who manages this merchant.
+  // Empty string if the merchant is managed directly by the system.
+  string agent_id = 5;
+
+  // deposit_fee_pct is the fee percentage charged on deposit transactions.
+  // Stored as a decimal string (e.g. "0.02" means 2%).
+  string deposit_fee_pct = 6;
+
+  // withdrawal_fee_pct is the fee percentage charged on withdrawal transactions.
+  // Stored as a decimal string (e.g. "0.01" means 1%).
+  string withdrawal_fee_pct = 7;
+
+  // daily_withdrawal_limit is the maximum total withdrawal amount per day
+  // in the merchant's base currency. Stored as a decimal string.
+  string daily_withdrawal_limit = 8;
+
+  // status indicates the merchant's current lifecycle state.
+  MerchantStatus status = 9;
+
+  // created_at is when the merchant was created (UTC).
+  google.protobuf.Timestamp created_at = 10;
+
+  // updated_at is when the merchant was last modified (UTC).
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+// CreateMerchantRequest contains all fields required to create a new merchant.
+message CreateMerchantRequest {
+  // name is the merchant's business name.
+  // Required field — must not be empty.
+  string name = 1;
+
+  // email is the merchant's contact email address.
+  // Required field — must not be empty.
+  string email = 2;
+
+  // webhook_url is the callback endpoint for order notifications.
+  // Required field — must be a valid HTTPS URL.
+  string webhook_url = 3;
+
+  // agent_id is the optional UUID of the managing agent.
+  // Empty string if the merchant is system-managed.
+  string agent_id = 4;
+
+  // deposit_fee_pct is the deposit fee percentage as a decimal string
+  // (e.g. "0.02" for 2%). Required field.
+  string deposit_fee_pct = 5;
+
+  // withdrawal_fee_pct is the withdrawal fee percentage as a decimal string
+  // (e.g. "0.01" for 1%). Required field.
+  string withdrawal_fee_pct = 6;
+
+  // daily_withdrawal_limit is the maximum daily withdrawal amount as a
+  // decimal string (e.g. "100000.00"). Required field.
+  string daily_withdrawal_limit = 7;
+}
+
+// CreateMerchantResponse contains the created merchant and its API key.
+// The api_key is ONLY returned at creation time and cannot be retrieved later.
+message CreateMerchantResponse {
+  // merchant is the newly created merchant record.
+  Merchant merchant = 1;
+
+  // api_key is the raw API key for the merchant. This is the ONLY time
+  // the key is available in plaintext. The caller must store it securely.
+  string api_key = 2;
+}
+
+// GetMerchantRequest identifies the merchant to retrieve.
+message GetMerchantRequest {
+  // id is the UUID of the merchant to retrieve.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+}
+
+// ListMerchantsRequest carries pagination and optional filter parameters.
+message ListMerchantsRequest {
+  // pagination contains the page number and page size.
+  PaginationRequest pagination = 1;
+
+  // agent_id is an optional filter to show only merchants managed by
+  // a specific agent. Empty string means no filter (return all merchants).
+  string agent_id = 2;
+}
+
+// ListMerchantsResponse contains the paginated list of merchants.
+message ListMerchantsResponse {
+  // merchants is the list of merchant records for the requested page.
+  repeated Merchant merchants = 1;
+
+  // pagination contains metadata about the total count and current page.
+  PaginationResponse pagination = 2;
+}
+
+// UpdateMerchantRequest performs a partial update on a merchant account.
+message UpdateMerchantRequest {
+  // id is the UUID of the merchant to update.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+
+  // name is the new business name. Omit to leave unchanged.
+  optional string name = 2;
+
+  // email is the new contact email. Omit to leave unchanged.
+  optional string email = 3;
+
+  // webhook_url is the new callback URL. Omit to leave unchanged.
+  optional string webhook_url = 4;
+
+  // status is the new status. Omit to leave unchanged.
+  optional MerchantStatus status = 5;
+}
+
+// UpdateMerchantResponse confirms that the merchant was updated successfully.
+message UpdateMerchantResponse {
+  // status is a confirmation string, typically "updated".
+  string status = 1;
+}
+
+// RevokeAPIKeyRequest identifies the merchant whose API key should be rotated.
+message RevokeAPIKeyRequest {
+  // id is the UUID of the merchant whose API key will be revoked and rotated.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+
+  // totp_code is the 6-digit TOTP code for admin verification.
+  // Required field — must not be empty.
+  string totp_code = 2;
+}
+
+// RevokeAPIKeyResponse contains the newly generated API key.
+message RevokeAPIKeyResponse {
+  // new_api_key is the freshly generated API key. This is the ONLY time
+  // it is available in plaintext. The caller must store it securely.
+  string new_api_key = 1;
+
+  // message is a human-readable confirmation message.
+  string message = 2;
+}
+
+// =============================================================================
+// Agent messages
+// =============================================================================
+
+// Agent represents an intermediary who manages a portfolio of merchants.
+// Agents earn commissions on transactions processed by their merchants.
+message Agent {
+  // id is the unique identifier for the agent (UUID v4 string).
+  string id = 1;
+
+  // name is the agent's display name.
+  string name = 2;
+
+  // email is the agent's contact email address. Unique across all agents.
+  string email = 3;
+
+  // partner_id is the UUID of the partner this agent belongs to.
+  // Empty string if the agent operates independently.
+  string partner_id = 4;
+
+  // commission_pct is the agent's commission percentage on merchant fees.
+  // Stored as a decimal string (e.g. "0.30" means 30% of the fee).
+  string commission_pct = 5;
+
+  // status indicates the agent's current lifecycle state.
+  AgentStatus status = 6;
+
+  // created_at is when the agent account was created (UTC).
+  google.protobuf.Timestamp created_at = 7;
+
+  // updated_at is when the agent account was last modified (UTC).
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// CreateAgentRequest contains all fields required to create a new agent.
+message CreateAgentRequest {
+  // name is the agent's display name.
+  // Required field — must not be empty.
+  string name = 1;
+
+  // email is the agent's login email address. Must be unique.
+  // Required field — must not be empty.
+  string email = 2;
+
+  // password is the plaintext password. Will be hashed server-side.
+  // Required field — must not be empty.
+  string password = 3;
+
+  // partner_id is the optional UUID of the managing partner.
+  // Empty string if the agent operates independently.
+  string partner_id = 4;
+
+  // commission_pct is the commission percentage as a decimal string
+  // (e.g. "0.30" for 30%). Required field.
+  string commission_pct = 5;
+}
+
+// GetAgentRequest identifies the agent to retrieve.
+message GetAgentRequest {
+  // id is the UUID of the agent to retrieve.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+}
+
+// ListAgentsRequest carries pagination and optional filter parameters.
+message ListAgentsRequest {
+  // pagination contains the page number and page size.
+  PaginationRequest pagination = 1;
+
+  // partner_id is an optional filter to show only agents managed by
+  // a specific partner. Empty string means no filter (return all agents).
+  string partner_id = 2;
+}
+
+// ListAgentsResponse contains the paginated list of agents.
+message ListAgentsResponse {
+  // agents is the list of agent records for the requested page.
+  repeated Agent agents = 1;
+
+  // pagination contains metadata about the total count and current page.
+  PaginationResponse pagination = 2;
+}
+
+// UpdateAgentRequest performs a partial update on an agent account.
+message UpdateAgentRequest {
+  // id is the UUID of the agent to update.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+
+  // name is the new display name. Omit to leave unchanged.
+  optional string name = 2;
+
+  // email is the new email address. Omit to leave unchanged.
+  optional string email = 3;
+
+  // status is the new status. Omit to leave unchanged.
+  optional AgentStatus status = 4;
+}
+
+// UpdateAgentResponse confirms that the agent was updated successfully.
+message UpdateAgentResponse {
+  // status is a confirmation string, typically "updated".
+  string status = 1;
+}
+
+// =============================================================================
+// Partner messages
+// =============================================================================
+
+// Partner represents a top-level entity that manages a network of agents.
+// Partners earn commissions on transactions processed by agents in their
+// network. They sit at the top of the commission hierarchy.
+message Partner {
+  // id is the unique identifier for the partner (UUID v4 string).
+  string id = 1;
+
+  // name is the partner's business name.
+  string name = 2;
+
+  // email is the partner's contact email address. Unique across all partners.
+  string email = 3;
+
+  // commission_pct is the partner's commission percentage on merchant fees
+  // processed through their agents. Stored as a decimal string.
+  string commission_pct = 4;
+
+  // status indicates the partner's current lifecycle state.
+  PartnerStatus status = 5;
+
+  // created_at is when the partner account was created (UTC).
+  google.protobuf.Timestamp created_at = 6;
+
+  // updated_at is when the partner account was last modified (UTC).
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// CreatePartnerRequest contains all fields required to create a new partner.
+message CreatePartnerRequest {
+  // name is the partner's business name.
+  // Required field — must not be empty.
+  string name = 1;
+
+  // email is the partner's login email address. Must be unique.
+  // Required field — must not be empty.
+  string email = 2;
+
+  // password is the plaintext password. Will be hashed server-side.
+  // Required field — must not be empty.
+  string password = 3;
+
+  // commission_pct is the commission percentage as a decimal string
+  // (e.g. "0.10" for 10%). Required field.
+  string commission_pct = 4;
+}
+
+// GetPartnerRequest identifies the partner to retrieve.
+message GetPartnerRequest {
+  // id is the UUID of the partner to retrieve.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+}
+
+// ListPartnersRequest carries pagination parameters for listing partners.
+message ListPartnersRequest {
+  // pagination contains the page number and page size.
+  PaginationRequest pagination = 1;
+}
+
+// ListPartnersResponse contains the paginated list of partners.
+message ListPartnersResponse {
+  // partners is the list of partner records for the requested page.
+  repeated Partner partners = 1;
+
+  // pagination contains metadata about the total count and current page.
+  PaginationResponse pagination = 2;
+}
+
+// UpdatePartnerRequest performs a partial update on a partner account.
+message UpdatePartnerRequest {
+  // id is the UUID of the partner to update.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+
+  // name is the new business name. Omit to leave unchanged.
+  optional string name = 2;
+
+  // email is the new email address. Omit to leave unchanged.
+  optional string email = 3;
+
+  // status is the new status. Omit to leave unchanged.
+  optional PartnerStatus status = 4;
+}
+
+// UpdatePartnerResponse confirms that the partner was updated successfully.
+message UpdatePartnerResponse {
+  // status is a confirmation string, typically "updated".
+  string status = 1;
+}

@@ -1,0 +1,399 @@
+// =============================================================================
+// withdrawal.proto — WithdrawalService gRPC definitions for the RichPayment
+// platform.
+//
+// The WithdrawalService manages the complete withdrawal lifecycle: creation
+// (with daily limit and balance checks), admin approval/rejection, and
+// completion (with fee calculation, wallet debit, and commission recording).
+//
+// Withdrawal lifecycle:
+//   1. Merchant requests a withdrawal -> status = pending, balance held.
+//   2. Admin approves or rejects     -> status = approved / rejected.
+//   3. Finance executes the transfer  -> status = completed / failed.
+//
+// Inter-service communication:
+//   withdrawal-service -> wallet-service   (hold, release, debit balance)
+//   withdrawal-service -> commission-service (record fee split on completion)
+//   withdrawal-service -> user-service     (fetch merchant fee configuration)
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+import "google/protobuf/timestamp.proto";
+import "proto/common.proto";
+
+// =============================================================================
+// WithdrawalService — RPC definitions for withdrawal management.
+// =============================================================================
+
+// WithdrawalService provides the complete withdrawal lifecycle for merchants
+// on the RichPayment platform. A withdrawal moves funds from a merchant's
+// platform wallet to an external bank account or PromptPay destination.
+//
+// The service enforces daily withdrawal limits, wallet balance checks, and
+// a mandatory admin-approval step before funds leave the platform.
+//
+// Security model:
+//   - Only merchants can create withdrawals (via the gateway).
+//   - Only admins can approve or reject withdrawals.
+//   - Only finance operators can mark withdrawals as completed.
+service WithdrawalService {
+  // Create initiates a new withdrawal request for a merchant.
+  // The service performs the following steps:
+  //   1. Check the merchant's daily withdrawal limit.
+  //   2. Verify sufficient available wallet balance.
+  //   3. Place a hold on the withdrawal amount in the wallet.
+  //   4. Persist the withdrawal record with status "pending".
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing required fields or invalid amount.
+  //   - FAILED_PRECONDITION: daily limit exceeded or insufficient balance.
+  //   - INTERNAL: wallet hold or database persistence failed.
+  rpc Create(CreateWithdrawalRequest) returns (Withdrawal);
+
+  // Approve transitions a pending withdrawal to "approved" status.
+  // After approval, the withdrawal is ready for the finance team to
+  // execute the bank transfer.
+  //
+  // Error codes:
+  //   - NOT_FOUND: withdrawal does not exist.
+  //   - FAILED_PRECONDITION: withdrawal is not in "pending" status.
+  //   - INVALID_ARGUMENT: missing admin_id.
+  rpc Approve(ApproveWithdrawalRequest) returns (ApproveWithdrawalResponse);
+
+  // Reject transitions a pending withdrawal to "rejected" status and
+  // releases the held balance back to the merchant's available wallet
+  // balance. A rejection reason must be provided for audit purposes.
+  //
+  // Error codes:
+  //   - NOT_FOUND: withdrawal does not exist.
+  //   - FAILED_PRECONDITION: withdrawal is not in "pending" status.
+  //   - INVALID_ARGUMENT: missing admin_id or reason.
+  //   - INTERNAL: wallet release failed.
+  rpc Reject(RejectWithdrawalRequest) returns (RejectWithdrawalResponse);
+
+  // Complete finalises an approved withdrawal after the bank transfer has
+  // been executed and confirmed. It performs the following steps:
+  //   1. Fetch the merchant's withdrawal fee percentage.
+  //   2. Calculate fee and net amounts.
+  //   3. Debit the held balance from the merchant's wallet.
+  //   4. Record the commission split via the commission-service.
+  //   5. Update the withdrawal record to "completed" status.
+  //
+  // Error codes:
+  //   - NOT_FOUND: withdrawal does not exist.
+  //   - FAILED_PRECONDITION: withdrawal is not in "approved" status.
+  //   - INTERNAL: wallet debit or commission recording failed.
+  rpc Complete(CompleteWithdrawalRequest) returns (CompleteWithdrawalResponse);
+
+  // Get retrieves a single withdrawal by its UUID.
+  // Returns the full withdrawal state including approval/rejection metadata.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no withdrawal exists with the given ID.
+  //   - INVALID_ARGUMENT: invalid UUID format.
+  rpc Get(GetWithdrawalRequest) returns (Withdrawal);
+
+  // ListPending returns a paginated list of all withdrawals that are
+  // currently in "pending" status, awaiting admin approval. Results are
+  // ordered by creation time (oldest first) to encourage FIFO processing.
+  //
+  // Error codes:
+  //   - INTERNAL: database query failed.
+  rpc ListPending(ListPendingWithdrawalsRequest) returns (ListPendingWithdrawalsResponse);
+}
+
+// =============================================================================
+// WithdrawalStatus — lifecycle states for withdrawal requests.
+// =============================================================================
+
+// WithdrawalStatus represents the current state of a withdrawal request
+// as it moves through the multi-step approval and settlement pipeline.
+// Each transition triggers corresponding wallet ledger entries.
+enum WithdrawalStatus {
+  // WITHDRAWAL_STATUS_UNSPECIFIED is the default zero value. Must not be
+  // used in valid requests — it indicates a missing or unset status.
+  WITHDRAWAL_STATUS_UNSPECIFIED = 0;
+
+  // WITHDRAWAL_STATUS_PENDING means the withdrawal has been created and
+  // the merchant's wallet balance has been held, awaiting admin approval.
+  WITHDRAWAL_STATUS_PENDING = 1;
+
+  // WITHDRAWAL_STATUS_APPROVED means an admin has approved the withdrawal
+  // and it is ready for the finance team to execute the bank transfer.
+  WITHDRAWAL_STATUS_APPROVED = 2;
+
+  // WITHDRAWAL_STATUS_REJECTED means an admin has rejected the withdrawal.
+  // The held balance has been released back to the merchant's wallet.
+  WITHDRAWAL_STATUS_REJECTED = 3;
+
+  // WITHDRAWAL_STATUS_COMPLETED means the bank transfer has been executed
+  // and confirmed. The held balance has been debited and commission recorded.
+  WITHDRAWAL_STATUS_COMPLETED = 4;
+
+  // WITHDRAWAL_STATUS_FAILED means the bank transfer failed after approval.
+  // The held balance should be released back to the merchant's wallet.
+  WITHDRAWAL_STATUS_FAILED = 5;
+}
+
+// =============================================================================
+// WithdrawalDestType — the type of destination for withdrawal funds.
+// =============================================================================
+
+// WithdrawalDestType indicates the payment method or channel used to
+// transfer funds out of the platform to the merchant's external account.
+enum WithdrawalDestType {
+  // WITHDRAWAL_DEST_TYPE_UNSPECIFIED is the default zero value. Must not
+  // be used in valid requests.
+  WITHDRAWAL_DEST_TYPE_UNSPECIFIED = 0;
+
+  // WITHDRAWAL_DEST_TYPE_BANK represents a standard bank account transfer.
+  // The dest_details field should contain bank name, account number, and
+  // account holder name as a JSON-encoded string.
+  WITHDRAWAL_DEST_TYPE_BANK = 1;
+
+  // WITHDRAWAL_DEST_TYPE_PROMPTPAY represents a PromptPay (Thai instant
+  // payment) transfer. The dest_details field should contain the PromptPay
+  // ID (phone number or citizen ID) as a JSON-encoded string.
+  WITHDRAWAL_DEST_TYPE_PROMPTPAY = 2;
+}
+
+// =============================================================================
+// Withdrawal — the full withdrawal entity message.
+// =============================================================================
+
+// Withdrawal represents a merchant's request to withdraw funds from their
+// RichPayment wallet to an external bank account or payment method. It
+// tracks the complete lifecycle from creation through approval to completion,
+// including all monetary calculations and audit metadata.
+message Withdrawal {
+  // id is the unique identifier for this withdrawal (UUID v4 string).
+  string id = 1;
+
+  // merchant_id is the UUID of the merchant who requested the withdrawal.
+  string merchant_id = 2;
+
+  // amount is the gross withdrawal amount requested by the merchant.
+  // Stored as a decimal string for precision (e.g. "50000.00").
+  string amount = 3;
+
+  // fee_amount is the platform fee deducted from the gross amount.
+  // Calculated as amount * merchant's withdrawal fee percentage.
+  // Empty string until the withdrawal is completed.
+  string fee_amount = 4;
+
+  // net_amount is the amount actually transferred to the destination
+  // after deducting fees: net_amount = amount - fee_amount.
+  // Empty string until the withdrawal is completed.
+  string net_amount = 5;
+
+  // currency is the ISO 4217 currency code (e.g. "THB").
+  string currency = 6;
+
+  // dest_type indicates the type of destination (bank, promptpay, etc.).
+  WithdrawalDestType dest_type = 7;
+
+  // dest_details is a JSON-encoded string containing destination-specific
+  // information. For bank transfers: bank name, account number, account
+  // holder name. For PromptPay: phone number or citizen ID.
+  string dest_details = 8;
+
+  // status is the current lifecycle state of the withdrawal.
+  WithdrawalStatus status = 9;
+
+  // approved_by is the UUID of the admin who approved the withdrawal.
+  // Empty string if the withdrawal has not been approved yet.
+  string approved_by = 10;
+
+  // approved_at is the timestamp when the withdrawal was approved.
+  // Not set while the withdrawal is pending.
+  google.protobuf.Timestamp approved_at = 11;
+
+  // rejected_by is the UUID of the admin who rejected the withdrawal.
+  // Empty string if the withdrawal has not been rejected.
+  string rejected_by = 12;
+
+  // rejected_at is the timestamp when the withdrawal was rejected.
+  // Not set while the withdrawal is pending or approved.
+  google.protobuf.Timestamp rejected_at = 13;
+
+  // rejection_reason is the human-readable reason for rejection provided
+  // by the admin. Empty string if the withdrawal has not been rejected.
+  string rejection_reason = 14;
+
+  // transfer_ref is the external reference number from the bank transfer
+  // (e.g. transaction ID from the bank). Set when the withdrawal completes.
+  string transfer_ref = 15;
+
+  // proof_url is the URL to the proof of transfer document (e.g. screenshot
+  // or PDF of the bank transfer confirmation). Set when completing.
+  string proof_url = 16;
+
+  // completed_at is the timestamp when the bank transfer was confirmed
+  // and the withdrawal was finalised. Not set until completion.
+  google.protobuf.Timestamp completed_at = 17;
+
+  // created_at is when the withdrawal was created (UTC).
+  google.protobuf.Timestamp created_at = 18;
+
+  // updated_at is when the withdrawal was last modified (UTC).
+  google.protobuf.Timestamp updated_at = 19;
+}
+
+// =============================================================================
+// CreateWithdrawal messages
+// =============================================================================
+
+// CreateWithdrawalRequest contains all fields required to initiate a new
+// withdrawal. The service validates limits and balance before creating
+// the withdrawal and placing a hold on the merchant's wallet.
+message CreateWithdrawalRequest {
+  // merchant_id is the UUID of the merchant requesting the withdrawal.
+  // Required field — must be a valid UUID string.
+  string merchant_id = 1;
+
+  // amount is the gross withdrawal amount as a Money message.
+  // The amount must be positive.
+  // Required field.
+  Money amount = 2;
+
+  // dest_type is the destination type: bank or promptpay.
+  // Required field — must be a valid WithdrawalDestType value.
+  WithdrawalDestType dest_type = 3;
+
+  // dest_details is a JSON-encoded string containing destination-specific
+  // information (e.g. bank name, account number, account holder name for
+  // bank transfers, or phone number for PromptPay).
+  // Required field — must not be empty.
+  string dest_details = 4;
+}
+
+// =============================================================================
+// ApproveWithdrawal messages
+// =============================================================================
+
+// ApproveWithdrawalRequest identifies the withdrawal to approve and the
+// admin performing the approval.
+message ApproveWithdrawalRequest {
+  // withdrawal_id is the UUID of the withdrawal to approve.
+  // Required field — must be a valid UUID string.
+  string withdrawal_id = 1;
+
+  // admin_id is the UUID of the admin performing the approval.
+  // Required field — must be a valid UUID string.
+  string admin_id = 2;
+}
+
+// ApproveWithdrawalResponse confirms that the withdrawal was approved.
+message ApproveWithdrawalResponse {
+  // status is a confirmation string, typically "approved".
+  string status = 1;
+}
+
+// =============================================================================
+// RejectWithdrawal messages
+// =============================================================================
+
+// RejectWithdrawalRequest identifies the withdrawal to reject, the admin
+// performing the rejection, and the reason for rejection.
+message RejectWithdrawalRequest {
+  // withdrawal_id is the UUID of the withdrawal to reject.
+  // Required field — must be a valid UUID string.
+  string withdrawal_id = 1;
+
+  // admin_id is the UUID of the admin performing the rejection.
+  // Required field — must be a valid UUID string.
+  string admin_id = 2;
+
+  // reason is the human-readable explanation for why the withdrawal was
+  // rejected. Required field — must not be empty. This is stored for
+  // audit purposes and may be shown to the merchant.
+  string reason = 3;
+}
+
+// RejectWithdrawalResponse confirms that the withdrawal was rejected and
+// the held balance was released.
+message RejectWithdrawalResponse {
+  // status is a confirmation string, typically "rejected".
+  string status = 1;
+}
+
+// =============================================================================
+// CompleteWithdrawal messages
+// =============================================================================
+
+// CompleteWithdrawalRequest carries the completion data for an approved
+// withdrawal after the bank transfer has been executed.
+message CompleteWithdrawalRequest {
+  // withdrawal_id is the UUID of the withdrawal to complete.
+  // The withdrawal must be in "approved" status.
+  // Required field — must be a valid UUID string.
+  string withdrawal_id = 1;
+
+  // transfer_ref is the external reference number from the bank transfer
+  // (e.g. the bank's transaction ID or confirmation number).
+  // Required field — must not be empty.
+  string transfer_ref = 2;
+
+  // proof_url is the URL to the transfer proof document (screenshot or
+  // PDF of the bank transfer confirmation).
+  // Optional field — can be empty if no proof is available yet.
+  string proof_url = 3;
+}
+
+// CompleteWithdrawalResponse confirms successful completion and returns
+// the calculated fee and net amounts.
+message CompleteWithdrawalResponse {
+  // status is the final withdrawal status, typically "completed".
+  string status = 1;
+
+  // fee_amount is the platform fee deducted from the withdrawal.
+  // Stored as a decimal string (e.g. "500.00").
+  string fee_amount = 2;
+
+  // net_amount is the amount transferred to the merchant after fees.
+  // Stored as a decimal string (e.g. "49500.00").
+  string net_amount = 3;
+
+  // message is a human-readable confirmation message.
+  string message = 4;
+}
+
+// =============================================================================
+// GetWithdrawal messages
+// =============================================================================
+
+// GetWithdrawalRequest identifies the withdrawal to retrieve.
+message GetWithdrawalRequest {
+  // id is the UUID of the withdrawal to retrieve.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+}
+
+// =============================================================================
+// ListPendingWithdrawals messages
+// =============================================================================
+
+// ListPendingWithdrawalsRequest carries pagination parameters for listing
+// pending withdrawals awaiting admin approval.
+message ListPendingWithdrawalsRequest {
+  // pagination contains the page number and page size.
+  // Defaults to page 1, limit 20 if not provided.
+  PaginationRequest pagination = 1;
+}
+
+// ListPendingWithdrawalsResponse contains the paginated list of pending
+// withdrawals and pagination metadata.
+message ListPendingWithdrawalsResponse {
+  // withdrawals is the list of pending withdrawal records for the
+  // requested page, ordered by creation time (oldest first).
+  repeated Withdrawal withdrawals = 1;
+
+  // pagination contains metadata about the total count and current page.
+  PaginationResponse pagination = 2;
+}

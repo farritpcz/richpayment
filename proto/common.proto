@@ -1,0 +1,181 @@
+// =============================================================================
+// common.proto — Shared types used across all RichPayment gRPC services.
+//
+// This file defines reusable message types for timestamps, monetary values,
+// pagination, and error handling. All service-specific .proto files import
+// this file to avoid duplicating common structures.
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// Money — represents a monetary value with currency and precise decimal amount.
+// =============================================================================
+
+// Money represents a monetary amount with an associated currency code.
+// The amount is stored as a string to preserve decimal precision across
+// serialisation boundaries, avoiding floating-point rounding errors that
+// are unacceptable in financial calculations.
+//
+// Example:
+//   { "amount": "1500.75", "currency": "THB" }
+message Money {
+  // amount is the decimal string representation of the monetary value.
+  // Must be a valid decimal number (e.g. "1000.00", "0.50", "99999.99").
+  // Negative values are allowed for debit entries.
+  // Required field — must not be empty.
+  string amount = 1;
+
+  // currency is the ISO 4217 three-letter currency code (e.g. "THB", "USD").
+  // Required field — must not be empty.
+  string currency = 2;
+}
+
+// =============================================================================
+// PaginationRequest — standard pagination parameters for list endpoints.
+// =============================================================================
+
+// PaginationRequest carries page-based pagination parameters for list RPCs.
+// All list endpoints in the RichPayment platform accept these parameters
+// to control result windowing.
+message PaginationRequest {
+  // page is the 1-based page number to retrieve.
+  // Defaults to 1 if not provided or if the value is less than 1.
+  int32 page = 1;
+
+  // limit is the maximum number of items to return per page.
+  // Defaults to 20 if not provided. Maximum allowed value is 100.
+  int32 limit = 2;
+}
+
+// =============================================================================
+// PaginationResponse — standard pagination metadata returned by list endpoints.
+// =============================================================================
+
+// PaginationResponse carries pagination metadata alongside the actual data
+// in list RPC responses. It tells the caller how many total items exist
+// and which page/window they are currently viewing.
+message PaginationResponse {
+  // total_count is the total number of items matching the query across
+  // all pages (before pagination is applied).
+  int32 total_count = 1;
+
+  // page is the current page number (echoed from the request).
+  int32 page = 2;
+
+  // limit is the page size (echoed from the request).
+  int32 limit = 3;
+}
+
+// =============================================================================
+// ErrorDetail — structured error information for gRPC responses.
+// =============================================================================
+
+// ErrorDetail provides structured error information that can be attached
+// to gRPC status responses. It contains a machine-readable error code
+// and a human-readable description for debugging.
+message ErrorDetail {
+  // code is a machine-readable error code string (e.g. "INSUFFICIENT_FUNDS",
+  // "WALLET_NOT_FOUND", "INVALID_AMOUNT"). Clients can switch on this
+  // code for programmatic error handling.
+  string code = 1;
+
+  // message is a human-readable error description intended for logging
+  // and debugging. It should NOT be displayed directly to end users.
+  string message = 2;
+
+  // field is the name of the request field that caused the error, if
+  // applicable (e.g. "amount", "merchant_id"). Empty when the error
+  // is not field-specific.
+  string field = 3;
+}
+
+// =============================================================================
+// OwnerType — identifies the type of entity that owns a wallet or resource.
+// =============================================================================
+
+// OwnerType enumerates the actor types in the RichPayment commission
+// hierarchy. Each actor type has its own wallet and may earn commissions
+// from transactions processed through the platform.
+//
+// Hierarchy: Partner -> Agent -> Merchant
+// The "system" type represents the platform itself.
+enum OwnerType {
+  // OWNER_TYPE_UNSPECIFIED is the default zero value. Must not be used
+  // in valid requests — it indicates a missing or unset owner type.
+  OWNER_TYPE_UNSPECIFIED = 0;
+
+  // OWNER_TYPE_MERCHANT represents a payment-accepting business.
+  // Merchants create deposit and withdrawal orders.
+  OWNER_TYPE_MERCHANT = 1;
+
+  // OWNER_TYPE_AGENT represents an intermediary who manages merchants.
+  // Agents earn commissions on their merchants' transaction fees.
+  OWNER_TYPE_AGENT = 2;
+
+  // OWNER_TYPE_PARTNER represents a top-level entity managing agents.
+  // Partners earn commissions on fees from their agents' merchants.
+  OWNER_TYPE_PARTNER = 3;
+
+  // OWNER_TYPE_SYSTEM represents the RichPayment platform itself.
+  // The system wallet collects the platform's share of transaction fees.
+  OWNER_TYPE_SYSTEM = 4;
+}
+
+// =============================================================================
+// TransactionType — distinguishes deposit vs. withdrawal transactions.
+// =============================================================================
+
+// TransactionType classifies a financial transaction as either a deposit
+// (money-in) or a withdrawal (money-out). Used in commission calculations
+// and reporting to separate the two transaction flows.
+enum TransactionType {
+  // TRANSACTION_TYPE_UNSPECIFIED is the default zero value. Must not be
+  // used in valid requests.
+  TRANSACTION_TYPE_UNSPECIFIED = 0;
+
+  // TRANSACTION_TYPE_DEPOSIT represents a money-in transaction where
+  // a customer transfers funds to the platform on behalf of a merchant.
+  TRANSACTION_TYPE_DEPOSIT = 1;
+
+  // TRANSACTION_TYPE_WITHDRAWAL represents a money-out transaction where
+  // a merchant withdraws funds from their platform wallet to an external
+  // bank account.
+  TRANSACTION_TYPE_WITHDRAWAL = 2;
+}
+
+// =============================================================================
+// Empty — placeholder for RPCs that require no input or output fields.
+// =============================================================================
+
+// Empty is a placeholder message for RPCs that do not require any
+// request or response fields. Prefer google.protobuf.Empty in most cases,
+// but this is provided for convenience when the caller wants to stay
+// within the richpayment.v1 package without an extra import.
+message Empty {}
+
+// =============================================================================
+// HealthCheckRequest / HealthCheckResponse — standard health check messages.
+// =============================================================================
+
+// HealthCheckRequest is sent to verify that a service is alive and ready
+// to handle requests. No fields are required.
+message HealthCheckRequest {}
+
+// HealthCheckResponse contains the result of a health check probe.
+// Used by Kubernetes liveness/readiness probes and load balancers.
+message HealthCheckResponse {
+  // status is a human-readable status string (e.g. "ok", "degraded").
+  string status = 1;
+
+  // service is the name of the service that responded (e.g. "auth-service",
+  // "wallet-service").
+  string service = 2;
+}

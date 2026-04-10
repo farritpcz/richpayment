@@ -1,46 +1,834 @@
+# =============================================================================
+# Docker Compose - RichPayment Platform (ระบบชำระเงิน)
+# =============================================================================
+#
+# ไฟล์นี้กำหนด services ทั้งหมดของระบบ RichPayment:
+# This file defines all services for the RichPayment platform:
+#
+#   Infrastructure (โครงสร้างพื้นฐาน):
+#     - postgres   : PostgreSQL 16 database (ฐานข้อมูลหลัก)
+#     - redis      : Redis 7 cache + session store (แคชและ session)
+#     - nats       : NATS JetStream message broker (message queue)
+#
+#   Microservices (ไมโครเซอร์วิส 12 ตัว):
+#     - gateway      : API Gateway - จุดเข้าหลักของระบบ (port 8080)
+#     - auth         : Authentication - ยืนยันตัวตน JWT/session (port 8081)
+#     - user         : User Management - จัดการ admin/merchant/agent/partner (port 8082)
+#     - order        : Deposit Orders - สร้างและจัดการรายการฝากเงิน (port 8083)
+#     - wallet       : Wallet & Ledger - กระเป๋าเงินและบัญชีแยกประเภท (port 8084)
+#     - withdrawal   : Withdrawals - จัดการคำขอถอนเงิน (port 8085)
+#     - parser       : SMS/Email Parser - แปลง SMS ธนาคารเป็นข้อมูล (port 8086)
+#     - notification : Webhook & Alerts - ส่ง webhook และแจ้งเตือน (port 8087)
+#     - commission   : Commission - คำนวณและแบ่งค่า fee (port 8088)
+#     - bank         : Bank Accounts - จัดการบัญชีธนาคารสำหรับรับเงิน (port 8089)
+#     - telegram     : Telegram Bot - ตรวจสอบสลิปผ่าน Telegram (port 8090)
+#     - scheduler    : Cron Jobs - งานตั้งเวลา เช่น expire orders, partitions (port 8091)
+#
+#   Networks (เครือข่าย):
+#     - public   : เฉพาะ gateway เท่านั้นที่เปิดรับจากภายนอก
+#     - internal : เครือข่ายภายใน สำหรับ service-to-service communication
+#
+# วิธีใช้ / Usage:
+#   docker compose up -d              # เริ่มทุก service
+#   docker compose up -d gateway      # เริ่มเฉพาะ gateway + dependencies
+#   docker compose logs -f gateway    # ดู log ของ gateway
+#   docker compose down               # หยุดทุก service
+#   docker compose build --parallel   # build ทุก service พร้อมกัน
+#
+# =============================================================================
+
+# เวอร์ชันของ Docker Compose file format
+# Version of Docker Compose file format
 version: '3.8'
 
+# =============================================================================
+# Services - กำหนด container ทั้งหมด
+# =============================================================================
 services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 - ฐานข้อมูลหลักของระบบ
+  # Main relational database for all persistent data
+  # ---------------------------------------------------------------------------
   postgres:
+    # ใช้ Alpine variant เพราะขนาดเล็กกว่า (~80MB vs ~400MB)
+    # Use Alpine variant for smaller image size
     image: postgres:16-alpine
+    # ชื่อ container สำหรับ reference ง่ายๆ
+    # Container name for easy reference
+    container_name: richpayment-postgres
     environment:
+      # ชื่อ database ที่สร้างตอน init
+      # Database name created on initialization
       POSTGRES_DB: richpayment
+      # Username สำหรับเชื่อมต่อ database
+      # Username for database connection
       POSTGRES_USER: richpayment
+      # Password สำหรับเชื่อมต่อ database (เปลี่ยนใน production!)
+      # Password for database connection (CHANGE IN PRODUCTION!)
       POSTGRES_PASSWORD: richpayment_dev
     ports:
+      # เปิด port 5432 ให้เข้าถึงจาก host (สำหรับ dev tools เช่น pgAdmin, DBeaver)
+      # Expose port 5432 for host access (dev tools like pgAdmin, DBeaver)
       - "5432:5432"
     volumes:
+      # Persistent volume สำหรับ data - ไม่หายเมื่อ restart container
+      # Persistent volume for data - survives container restarts
       - postgres_data:/var/lib/postgresql/data
+      # Mount migration files เข้า initdb.d เพื่อ run ตอน first start
+      # Mount migration files into initdb.d to run on first start
       - ./migrations:/docker-entrypoint-initdb.d
     healthcheck:
+      # ตรวจสอบว่า PostgreSQL พร้อมรับ connection หรือยัง
+      # Check if PostgreSQL is ready to accept connections
       test: ["CMD-SHELL", "pg_isready -U richpayment"]
+      # ตรวจสอบทุก 5 วินาที / Check every 5 seconds
       interval: 5s
+      # timeout ต่อครั้ง / Timeout per check
       timeout: 5s
+      # จำนวนครั้งที่ retry ก่อนถือว่า unhealthy / Retries before unhealthy
       retries: 5
+    networks:
+      # PostgreSQL อยู่ใน internal network เท่านั้น (ไม่เปิดสู่ public)
+      # PostgreSQL is on internal network only (not exposed to public)
+      - internal
 
+  # ---------------------------------------------------------------------------
+  # Redis 7 - Cache, Session Store, และ Order Matching Queue
+  # Used for caching, session management, and pending order lookups
+  # ---------------------------------------------------------------------------
   redis:
+    # ใช้ Alpine variant เพราะขนาดเล็ก (~30MB)
+    # Use Alpine variant for smaller image size
     image: redis:7-alpine
+    # ชื่อ container / Container name
+    container_name: richpayment-redis
+    # เปิด requirepass เพื่อความปลอดภัย (เปลี่ยนใน production!)
+    # Enable password authentication (CHANGE IN PRODUCTION!)
     command: redis-server --requirepass richpayment_dev
     ports:
+      # เปิด port 6379 ให้เข้าถึงจาก host (สำหรับ redis-cli, RedisInsight)
+      # Expose port 6379 for host access (redis-cli, RedisInsight)
       - "6379:6379"
     volumes:
+      # Persistent volume สำหรับ RDB/AOF snapshots
+      # Persistent volume for RDB/AOF snapshots
       - redis_data:/data
     healthcheck:
+      # ตรวจสอบว่า Redis ตอบ PONG หรือไม่
+      # Check if Redis responds with PONG
       test: ["CMD", "redis-cli", "-a", "richpayment_dev", "ping"]
+      # ตรวจสอบทุก 5 วินาที / Check every 5 seconds
       interval: 5s
+      # timeout ต่อครั้ง / Timeout per check
       timeout: 5s
+      # จำนวนครั้งที่ retry / Retries before unhealthy
       retries: 5
+    networks:
+      # Redis อยู่ใน internal network เท่านั้น
+      # Redis is on internal network only
+      - internal
 
+  # ---------------------------------------------------------------------------
+  # NATS JetStream - Message Broker สำหรับ Event-Driven Architecture
+  # Lightweight message broker for async communication between services
+  # ---------------------------------------------------------------------------
   nats:
+    # ใช้ Alpine variant
+    # Use Alpine variant for smaller image size
     image: nats:2-alpine
+    # ชื่อ container / Container name
+    container_name: richpayment-nats
+    # เปิด JetStream (-js) พร้อม persistent storage (-sd) และ monitoring (-m)
+    # Enable JetStream with persistent storage and monitoring endpoint
     command: ["-js", "-sd", "/data", "-m", "8222"]
     ports:
+      # NATS client port สำหรับ service connections
+      # NATS client port for service connections
       - "4222:4222"
+      # NATS monitoring HTTP endpoint
+      # NATS monitoring HTTP endpoint
       - "8222:8222"
     volumes:
+      # Persistent volume สำหรับ JetStream data
+      # Persistent volume for JetStream data
       - nats_data:/data
+    networks:
+      # NATS อยู่ใน internal network เท่านั้น
+      # NATS is on internal network only
+      - internal
 
+  # ===========================================================================
+  # Go Microservices - 12 services ที่ build จาก Dockerfile เดียวกัน
+  # All 12 services built from the same multi-stage Dockerfile
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # Gateway Service - API Gateway (จุดเข้าหลักของระบบ)
+  # Main entry point for all external API requests
+  # Routes requests to internal services, handles auth middleware, rate limiting
+  # ---------------------------------------------------------------------------
+  gateway:
+    # Build จาก Dockerfile ด้วย SERVICE_NAME=gateway
+    # Build from Dockerfile with SERVICE_NAME=gateway
+    build:
+      # ใช้ root directory เป็น build context (ต้องการ pkg/ + services/)
+      # Use root directory as build context (needs pkg/ + services/)
+      context: .
+      # ใช้ Dockerfile ที่ root
+      # Use Dockerfile at root
+      dockerfile: Dockerfile
+      args:
+        # ระบุชื่อ service ที่จะ build (ใช้ใน COPY services/${SERVICE_NAME}/)
+        # Specify which service to build (used in COPY services/${SERVICE_NAME}/)
+        SERVICE_NAME: gateway
+    # ชื่อ container / Container name
+    container_name: richpayment-gateway
+    ports:
+      # ** เฉพาะ gateway เท่านั้นที่เปิด port ให้ภายนอก **
+      # ** ONLY gateway exposes its port to the host **
+      # ใช้ port 8080 เป็น entry point หลัก
+      # Port 8080 is the main entry point
+      - "8080:8080"
+    environment:
+      # ===== Database Connection =====
+      # PostgreSQL connection string (ใช้ชื่อ service 'postgres' เป็น hostname)
+      # PostgreSQL connection string (service name 'postgres' as hostname)
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection =====
+      # Redis connection string พร้อม password
+      # Redis connection string with password
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      # NATS server URL สำหรับ event publishing/subscribing
+      # NATS server URL for event publishing/subscribing
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      # Port ที่ service listen (ตรงกับ port mapping ด้านบน)
+      # Port the service listens on (matches port mapping above)
+      SERVICE_PORT: "8080"
+      # ชื่อ service สำหรับ logging และ tracing
+      # Service name for logging and tracing
+      SERVICE_NAME: "gateway"
+      # ===== Internal Service URLs (สำหรับ routing requests ไปยัง services อื่น) =====
+      # Internal service URLs for proxying/routing requests
+      AUTH_SERVICE_URL: "http://auth:8081"
+      USER_SERVICE_URL: "http://user:8082"
+      ORDER_SERVICE_URL: "http://order:8083"
+      WALLET_SERVICE_URL: "http://wallet:8084"
+      WITHDRAWAL_SERVICE_URL: "http://withdrawal:8085"
+      PARSER_SERVICE_URL: "http://parser:8086"
+      NOTIFICATION_SERVICE_URL: "http://notification:8087"
+      COMMISSION_SERVICE_URL: "http://commission:8088"
+      BANK_SERVICE_URL: "http://bank:8089"
+      TELEGRAM_SERVICE_URL: "http://telegram:8090"
+      SCHEDULER_SERVICE_URL: "http://scheduler:8091"
+    depends_on:
+      # รอให้ postgres healthy ก่อน (ต้องการ DB connection)
+      # Wait for postgres to be healthy (needs DB connection)
+      postgres:
+        condition: service_healthy
+      # รอให้ redis healthy ก่อน (ต้องการ session store)
+      # Wait for redis to be healthy (needs session store)
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # ตรวจสอบว่า gateway ตอบ healthz endpoint ด้วย HTTP 200
+      # Check if gateway responds to healthz endpoint with HTTP 200
+      test: ["CMD", "/app/service", "--healthcheck"]
+      # ตรวจสอบทุก 10 วินาที / Check every 10 seconds
+      interval: 10s
+      # timeout ต่อครั้ง / Timeout per check
+      timeout: 5s
+      # จำนวนครั้งที่ retry / Retries before unhealthy
+      retries: 3
+      # รอ 10 วินาทีก่อนเริ่ม healthcheck (ให้ service boot ก่อน)
+      # Wait 10 seconds before starting health checks (let service boot)
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      # Gateway อยู่ทั้ง public (รับ traffic จากภายนอก) และ internal (คุยกับ services อื่น)
+      # Gateway is on both public (external traffic) and internal (talks to other services)
+      - public
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Auth Service - Authentication & Authorization (ยืนยันตัวตน)
+  # Handles login, JWT token generation/validation, session management, 2FA
+  # ---------------------------------------------------------------------------
+  auth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build auth service
+        SERVICE_NAME: auth
+    container_name: richpayment-auth
+    # ไม่เปิด port ให้ภายนอก - เข้าถึงผ่าน gateway เท่านั้น
+    # No port exposed to host - access only through gateway
+    expose:
+      # เปิด port 8081 ภายใน Docker network เท่านั้น
+      # Expose port 8081 within Docker network only
+      - "8081"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection (สำหรับ session store + token blacklist) =====
+      # Redis for session store and token blacklist
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8081"
+      SERVICE_NAME: "auth"
+      # JWT signing secret (เปลี่ยนใน production! ใช้ random 256-bit key)
+      # JWT signing secret (CHANGE IN PRODUCTION! Use random 256-bit key)
+      JWT_SECRET: "dev-jwt-secret-change-in-production"
+      # JWT token expiry (เช่น 24 ชั่วโมง)
+      # JWT token expiry duration
+      JWT_EXPIRY: "24h"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      # Auth อยู่ใน internal network เท่านั้น
+      # Auth is on internal network only
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # User Service - User Management (จัดการผู้ใช้)
+  # CRUD operations for admins, merchants, agents, partners
+  # ---------------------------------------------------------------------------
+  user:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build user service
+        SERVICE_NAME: user
+    container_name: richpayment-user
+    # ไม่เปิด port ให้ภายนอก / No port exposed to host
+    expose:
+      - "8082"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection =====
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8082"
+      SERVICE_NAME: "user"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Order Service - Deposit Order Management (จัดการรายการฝากเงิน)
+  # Creates deposit orders, manages order lifecycle, matches with bank transactions
+  # Flow: create order -> assign bank account -> wait for match -> settle
+  # ---------------------------------------------------------------------------
+  order:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build order service
+        SERVICE_NAME: order
+    container_name: richpayment-order
+    # ไม่เปิด port ให้ภายนอก / No port exposed to host
+    expose:
+      - "8083"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection (สำหรับ pending order cache ที่ parser ใช้ match) =====
+      # Redis for pending order cache used by parser for matching
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8083"
+      SERVICE_NAME: "order"
+      # ===== Inter-Service Communication =====
+      # URL ของ wallet service สำหรับ credit balance หลัง match
+      # Wallet service URL for crediting balance after match
+      WALLET_SERVICE_URL: "http://wallet:8084"
+      # URL ของ bank service สำหรับเลือกบัญชีรับเงิน
+      # Bank service URL for selecting receiving account
+      BANK_SERVICE_URL: "http://bank:8089"
+      # URL ของ commission service สำหรับคำนวณ fee
+      # Commission service URL for fee calculation
+      COMMISSION_SERVICE_URL: "http://commission:8088"
+      # URL ของ notification service สำหรับส่ง webhook
+      # Notification service URL for sending webhooks
+      NOTIFICATION_SERVICE_URL: "http://notification:8087"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Wallet Service - Wallet & Ledger Management (กระเป๋าเงินและบัญชีแยกประเภท)
+  # Manages wallet balances, hold/release, and immutable ledger entries
+  # Uses optimistic locking (version column) to prevent race conditions
+  # ---------------------------------------------------------------------------
+  wallet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build wallet service
+        SERVICE_NAME: wallet
+    container_name: richpayment-wallet
+    # ไม่เปิด port ให้ภายนอก / No port exposed to host
+    expose:
+      - "8084"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection (สำหรับ balance cache) =====
+      # Redis for balance caching
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8084"
+      SERVICE_NAME: "wallet"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Withdrawal Service - Withdrawal Management (จัดการคำขอถอนเงิน)
+  # Handles withdrawal requests: create -> approve/reject -> execute -> complete
+  # Coordinates with wallet (hold/release), commission (fee split), bank (transfer)
+  # ---------------------------------------------------------------------------
+  withdrawal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build withdrawal service
+        SERVICE_NAME: withdrawal
+    container_name: richpayment-withdrawal
+    # ไม่เปิด port ให้ภายนอก / No port exposed to host
+    expose:
+      - "8085"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection =====
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8085"
+      SERVICE_NAME: "withdrawal"
+      # ===== Inter-Service Communication =====
+      # URL ของ wallet service สำหรับ hold/release/debit balance
+      # Wallet service URL for hold/release/debit balance
+      WALLET_SERVICE_URL: "http://wallet:8084"
+      # URL ของ commission service สำหรับบันทึก withdrawal fee split
+      # Commission service URL for recording withdrawal fee split
+      COMMISSION_SERVICE_URL: "http://commission:8088"
+      # URL ของ user service สำหรับดึงข้อมูล merchant
+      # User service URL for fetching merchant data
+      USER_SERVICE_URL: "http://user:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Parser Service - SMS/Email Parser (แปลง SMS ธนาคารเป็นข้อมูล)
+  # Receives raw SMS/email from bank notifications, parses amount/ref/sender
+  # Matches parsed data against pending deposit orders in Redis
+  # ---------------------------------------------------------------------------
+  parser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build parser service
+        SERVICE_NAME: parser
+    container_name: richpayment-parser
+    # ไม่เปิด port ให้ภายนอก / No port exposed to host
+    expose:
+      - "8086"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection (สำหรับ lookup pending orders ที่ order service เขียนไว้) =====
+      # Redis for looking up pending orders written by order service
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8086"
+      SERVICE_NAME: "parser"
+      # ===== Inter-Service Communication =====
+      # URL ของ order service สำหรับแจ้ง match result
+      # Order service URL for notifying match results
+      ORDER_SERVICE_URL: "http://order:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Notification Service - Webhook & Alert Delivery (ส่ง webhook และแจ้งเตือน)
+  # Sends webhook callbacks to merchants, Telegram alerts, retry failed deliveries
+  # Exponential backoff: 10s, 30s, 90s, 270s, 810s (max 5 retries)
+  # ---------------------------------------------------------------------------
+  notification:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build notification service
+        SERVICE_NAME: notification
+    container_name: richpayment-notification
+    # ไม่เปิด port ให้ภายนอก / No port exposed to host
+    expose:
+      - "8087"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection =====
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8087"
+      SERVICE_NAME: "notification"
+      # ===== Telegram Bot Configuration =====
+      # Telegram Bot API token (สร้างจาก @BotFather)
+      # Telegram Bot API token (create via @BotFather)
+      TELEGRAM_BOT_TOKEN: ""
+      # จำนวนครั้งสูงสุดที่ retry webhook / Max webhook retry attempts
+      WEBHOOK_MAX_RETRIES: "5"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Commission Service - Fee Calculation & Split (คำนวณและแบ่งค่า fee)
+  # Calculates commission splits: System + Agent + Partner = Total Fee
+  # Records commission entries and updates daily summary aggregates
+  # ---------------------------------------------------------------------------
+  commission:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build commission service
+        SERVICE_NAME: commission
+    container_name: richpayment-commission
+    # ไม่เปิด port ให้ภายนอก / No port exposed to host
+    expose:
+      - "8088"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection =====
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8088"
+      SERVICE_NAME: "commission"
+      # ===== Inter-Service Communication =====
+      # URL ของ wallet service สำหรับ credit commission ให้ agent/partner/system
+      # Wallet service URL for crediting commission to agent/partner/system
+      WALLET_SERVICE_URL: "http://wallet:8084"
+      # URL ของ user service สำหรับดึง commission rates
+      # User service URL for fetching commission rates
+      USER_SERVICE_URL: "http://user:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Bank Service - Bank Account Pool Management (จัดการบัญชีธนาคาร)
+  # Manages pool of receiving bank accounts, auto-rotation when limits reached
+  # Handles fund transfers from receiving accounts to holding accounts
+  # ---------------------------------------------------------------------------
+  bank:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build bank service
+        SERVICE_NAME: bank
+    container_name: richpayment-bank
+    # ไม่เปิด port ให้ภายนอก / No port exposed to host
+    expose:
+      - "8089"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection (สำหรับ cache account pool sorted set) =====
+      # Redis for caching account pool sorted set
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8089"
+      SERVICE_NAME: "bank"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Telegram Service - Telegram Bot for Slip Verification (ตรวจสอบสลิป)
+  # Receives slip photos from Telegram groups, verifies via EasySlip API
+  # Matches verified slips to pending deposit orders
+  # ---------------------------------------------------------------------------
+  telegram:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build telegram service
+        SERVICE_NAME: telegram
+    container_name: richpayment-telegram
+    # ไม่เปิด port ให้ภายนอก / No port exposed to host
+    expose:
+      - "8090"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection =====
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8090"
+      SERVICE_NAME: "telegram"
+      # ===== Telegram Bot Configuration =====
+      # Telegram Bot API token (สร้างจาก @BotFather)
+      # Telegram Bot API token (create via @BotFather)
+      TELEGRAM_BOT_TOKEN: ""
+      # ===== EasySlip API Configuration =====
+      # EasySlip API key สำหรับตรวจสอบสลิป
+      # EasySlip API key for slip verification
+      EASYSLIP_API_KEY: ""
+      # ===== Inter-Service Communication =====
+      # URL ของ order service สำหรับแจ้ง slip match
+      # Order service URL for notifying slip match results
+      ORDER_SERVICE_URL: "http://order:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # ---------------------------------------------------------------------------
+  # Scheduler Service - Cron Jobs & Periodic Tasks (งานตั้งเวลา)
+  # Runs periodic tasks:
+  #   - Expire pending orders ที่หมดเวลา (ทุก 30 วินาที)
+  #   - Reset daily bank account counters (เที่ยงคืน)
+  #   - Create future PostgreSQL partitions (ทุกชั่วโมง)
+  #   - Aggregate commission daily summaries (ตอนจบวัน)
+  #   - Clean up old data / archive (รายสัปดาห์)
+  # ---------------------------------------------------------------------------
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Build scheduler service
+        SERVICE_NAME: scheduler
+    container_name: richpayment-scheduler
+    # ไม่เปิด port ให้ภายนอก / No port exposed to host
+    expose:
+      - "8091"
+    environment:
+      # ===== Database Connection =====
+      DATABASE_URL: "postgres://richpayment:richpayment_dev@postgres:5432/richpayment?sslmode=disable"
+      # ===== Redis Connection =====
+      REDIS_URL: "redis://:richpayment_dev@redis:6379/0"
+      # ===== NATS Connection =====
+      NATS_URL: "nats://nats:4222"
+      # ===== Service-Specific =====
+      SERVICE_PORT: "8091"
+      SERVICE_NAME: "scheduler"
+      # ===== Timezone สำหรับ cron jobs (ใช้เวลาไทย) =====
+      # Timezone for cron job scheduling (Thai time)
+      TZ: "Asia/Bangkok"
+      # ===== Inter-Service Communication =====
+      # URL ของ order service สำหรับ expire orders
+      # Order service URL for expiring timed-out orders
+      ORDER_SERVICE_URL: "http://order:8083"
+      # URL ของ bank service สำหรับ reset daily counters
+      # Bank service URL for resetting daily counters
+      BANK_SERVICE_URL: "http://bank:8089"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/service", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - internal
+
+# =============================================================================
+# Networks - เครือข่าย Docker สำหรับแยก traffic
+# Docker networks for traffic isolation
+# =============================================================================
+networks:
+  # ---------------------------------------------------------------------------
+  # Public Network - เครือข่ายสาธารณะ
+  # Only the gateway service is attached to this network
+  # External traffic enters through gateway and is routed to internal services
+  # ---------------------------------------------------------------------------
+  public:
+    # ใช้ bridge driver (default สำหรับ single-host)
+    # Use bridge driver (default for single-host deployments)
+    driver: bridge
+    # ชื่อเครือข่ายจริงใน Docker / Actual network name in Docker
+    name: richpayment-public
+
+  # ---------------------------------------------------------------------------
+  # Internal Network - เครือข่ายภายใน
+  # All services communicate through this network
+  # Not accessible from the host machine directly
+  # ---------------------------------------------------------------------------
+  internal:
+    # ใช้ bridge driver / Use bridge driver
+    driver: bridge
+    # ชื่อเครือข่ายจริงใน Docker / Actual network name in Docker
+    name: richpayment-internal
+    # ทำให้เครือข่ายนี้ไม่สามารถเข้าถึงจากภายนอก Docker
+    # Make this network inaccessible from outside Docker
+    internal: true
+
+# =============================================================================
+# Volumes - Persistent storage สำหรับ data ที่ต้องเก็บถาวร
+# Persistent storage for data that must survive container restarts
+# =============================================================================
 volumes:
+  # ข้อมูล PostgreSQL (tables, indexes, WAL logs)
+  # PostgreSQL data (tables, indexes, WAL logs)
   postgres_data:
+    # ชื่อ volume จริงใน Docker / Actual volume name in Docker
+    name: richpayment-postgres-data
+  # ข้อมูล Redis (RDB snapshots, AOF append-only files)
+  # Redis data (RDB snapshots, AOF append-only files)
   redis_data:
+    name: richpayment-redis-data
+  # ข้อมูล NATS JetStream (streams, consumers, messages)
+  # NATS JetStream data (streams, consumers, messages)
   nats_data:
+    name: richpayment-nats-data

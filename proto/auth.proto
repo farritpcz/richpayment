@@ -1,0 +1,200 @@
+// =============================================================================
+// auth.proto — AuthService gRPC definitions for the RichPayment platform.
+//
+// The AuthService handles user authentication, session management, and
+// session validation. It supports multiple user types (admin, merchant,
+// agent) and optional TOTP-based two-factor authentication.
+//
+// This service is called by the gateway-api to authenticate incoming
+// requests and by other internal services to validate session tokens.
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// AuthService — RPC definitions for authentication and session management.
+// =============================================================================
+
+// AuthService provides authentication and session management operations
+// for all user types in the RichPayment platform. It centralises login,
+// logout, and session validation so that every microservice can verify
+// user identity through a single authoritative source.
+//
+// Authentication flow:
+//   1. Client sends Login with credentials + optional TOTP code.
+//   2. AuthService verifies credentials, creates a Redis session, and
+//      returns a session ID with expiry.
+//   3. Client includes the session ID in subsequent requests.
+//   4. Gateway calls ValidateSession to verify the session on each request.
+//   5. Client calls Logout to destroy the session when finished.
+service AuthService {
+  // Login authenticates a user by email, password, and optional TOTP code.
+  // On success, creates a new session in Redis and returns the session
+  // metadata including the session ID, user ID, role, and expiry time.
+  //
+  // Error codes:
+  //   - UNAUTHENTICATED: invalid credentials or TOTP code.
+  //   - INVALID_ARGUMENT: missing required fields (email, password).
+  //   - PERMISSION_DENIED: account is locked or suspended.
+  rpc Login(LoginRequest) returns (LoginResponse);
+
+  // Logout destroys an active session identified by its session ID.
+  // After logout, the session ID can no longer be used for authentication.
+  //
+  // Error codes:
+  //   - NOT_FOUND: session does not exist or has already expired.
+  //   - INVALID_ARGUMENT: session_id is empty.
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+
+  // ValidateSession checks whether a session ID corresponds to an active,
+  // non-expired session. Returns the session metadata if valid, or a
+  // response with valid=false if the session has expired or does not exist.
+  //
+  // This RPC is designed to never return an error for expired/missing
+  // sessions — it returns valid=false instead. Errors are reserved for
+  // infrastructure failures (Redis down, etc.).
+  rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
+}
+
+// =============================================================================
+// UserType — the type of user attempting to authenticate.
+// =============================================================================
+
+// UserType identifies the actor type so the auth service knows which
+// database table to query for credentials. Each user type has a separate
+// table with different columns and permission models.
+enum UserType {
+  // USER_TYPE_UNSPECIFIED is the default zero value. When not provided,
+  // the auth service defaults to USER_TYPE_ADMIN for backward compatibility.
+  USER_TYPE_UNSPECIFIED = 0;
+
+  // USER_TYPE_ADMIN represents a back-office administrator who manages
+  // the platform via the admin dashboard.
+  USER_TYPE_ADMIN = 1;
+
+  // USER_TYPE_MERCHANT represents a payment-accepting business that
+  // interacts with the platform via the merchant API.
+  USER_TYPE_MERCHANT = 2;
+
+  // USER_TYPE_AGENT represents an intermediary who manages a portfolio
+  // of merchants and earns commissions on their transactions.
+  USER_TYPE_AGENT = 3;
+}
+
+// =============================================================================
+// LoginRequest / LoginResponse — authenticate a user and create a session.
+// =============================================================================
+
+// LoginRequest carries the credentials needed to authenticate a user.
+// The auth service verifies the password hash and optional TOTP code,
+// then creates a Redis session on success.
+message LoginRequest {
+  // email is the user's login email address.
+  // Required field — must not be empty.
+  string email = 1;
+
+  // password is the plaintext password to verify against the stored
+  // bcrypt hash. Required field — must not be empty.
+  // This value is never persisted or logged.
+  string password = 2;
+
+  // totp_code is the optional 6-digit TOTP code from the user's
+  // authenticator app. Required only when the user has enabled 2FA.
+  // If 2FA is enabled and this field is empty, login will fail.
+  string totp_code = 3;
+
+  // user_type indicates the actor type (admin, merchant, agent) so the
+  // correct user table is queried. Defaults to USER_TYPE_ADMIN if not set.
+  UserType user_type = 4;
+}
+
+// LoginResponse contains the session metadata returned on successful
+// authentication. The session_id should be stored by the client and
+// included in subsequent requests for authorisation.
+message LoginResponse {
+  // session_id is the unique identifier for the newly created session.
+  // This value is used as the Redis key suffix and should be treated
+  // as an opaque token by the client.
+  string session_id = 1;
+
+  // user_id is the UUID of the authenticated user.
+  string user_id = 2;
+
+  // email is the authenticated user's email address, echoed back for
+  // convenience.
+  string email = 3;
+
+  // role is the human-readable role name assigned to the user
+  // (e.g. "super_admin", "operator", "merchant").
+  string role = 4;
+
+  // role_mask is the effective permission bitmask for the session.
+  // Each bit represents a specific capability. Downstream services
+  // check this mask for authorisation decisions.
+  uint64 role_mask = 5;
+
+  // expires_at is the timestamp when the session expires and becomes
+  // invalid. The client should refresh or re-authenticate before this time.
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+// =============================================================================
+// LogoutRequest / LogoutResponse — destroy an active session.
+// =============================================================================
+
+// LogoutRequest identifies the session to be destroyed.
+message LogoutRequest {
+  // session_id is the unique identifier of the session to destroy.
+  // Required field — must not be empty.
+  string session_id = 1;
+}
+
+// LogoutResponse confirms that the session was successfully destroyed.
+message LogoutResponse {
+  // status is a confirmation string, typically "ok".
+  string status = 1;
+}
+
+// =============================================================================
+// ValidateSessionRequest / ValidateSessionResponse — verify a session.
+// =============================================================================
+
+// ValidateSessionRequest carries the session ID to check for validity.
+message ValidateSessionRequest {
+  // session_id is the unique identifier of the session to validate.
+  // Required field — must not be empty.
+  string session_id = 1;
+}
+
+// ValidateSessionResponse contains the validation result and, when valid,
+// the session metadata that downstream services need for authorisation.
+message ValidateSessionResponse {
+  // valid indicates whether the session is still active and not expired.
+  // When false, all other fields in this message should be ignored.
+  bool valid = 1;
+
+  // user_id is the UUID of the session owner. Empty when valid is false.
+  string user_id = 2;
+
+  // email is the session owner's email address. Empty when valid is false.
+  string email = 3;
+
+  // user_type is the actor type string (e.g. "admin", "merchant", "agent").
+  // Empty when valid is false.
+  string user_type = 4;
+
+  // role is the session owner's human-readable role name.
+  // Empty when valid is false.
+  string role = 5;
+
+  // role_mask is the effective permission bitmask for the session.
+  // Zero when valid is false.
+  uint64 role_mask = 6;
+}

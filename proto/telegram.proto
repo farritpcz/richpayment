@@ -1,0 +1,218 @@
+// =============================================================================
+// telegram.proto — TelegramService gRPC definitions for the RichPayment
+// platform.
+//
+// The TelegramService manages the platform's Telegram bot, which provides
+// two key capabilities:
+//
+//   1. Slip verification: operators forward bank transfer slip images to the
+//      bot, which downloads the photo, sends it to a verification API, and
+//      replies with the result (valid/invalid + extracted transaction data).
+//
+//   2. Security alerts: other services call the TelegramService to send
+//      formatted security alerts to the admin Telegram channel (e.g. login
+//      failures, emergency freezes, SMS spoofing attempts).
+//
+// The bot can operate in two modes:
+//   - Long-polling: the bot actively polls Telegram for updates.
+//   - Webhook: Telegram pushes updates to a registered HTTPS endpoint.
+//
+// Inter-service communication:
+//   notification-service -> telegram-service (security alert delivery)
+//   admin-dashboard      -> telegram-service (manual slip verification)
+//   Telegram API         -> telegram-service (webhook updates)
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+// =============================================================================
+// TelegramService — RPC definitions for Telegram bot operations.
+// =============================================================================
+
+// TelegramService provides Telegram bot operations for the RichPayment
+// platform. It manages slip verification via the Telegram bot and security
+// alert delivery to the admin channel.
+//
+// The service acts as the bridge between the internal microservice mesh
+// and the Telegram Bot API, handling authentication, message formatting,
+// photo downloads, and rate limiting.
+service TelegramService {
+  // VerifySlip processes a bank transfer slip image. The service downloads
+  // the photo from Telegram's file API, sends it to the slip verification
+  // service for OCR and validation, and returns the verification result.
+  //
+  // This RPC is typically triggered when an operator forwards a slip image
+  // to the bot in a group chat. The bot downloads the highest-resolution
+  // version of the photo and passes it to the verification pipeline.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing file_id or chat_id.
+  //   - INTERNAL: Telegram API call or verification service failed.
+  //   - NOT_FOUND: file_id does not correspond to a valid Telegram file.
+  rpc VerifySlip(VerifySlipRequest) returns (VerifySlipResponse);
+
+  // SendAlert sends a formatted security alert message to the pre-configured
+  // admin Telegram channel. The message is formatted with severity level,
+  // timestamp, and structured event details.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing alert_type.
+  //   - INTERNAL: Telegram API call failed.
+  rpc SendAlert(TelegramSendAlertRequest) returns (TelegramSendAlertResponse);
+
+  // SendGroupReply sends a text reply to a specific Telegram group chat.
+  // Used to deliver verification results, status updates, or error messages
+  // back to the operator who initiated the request.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing chat_id or message.
+  //   - INTERNAL: Telegram API call failed.
+  rpc SendGroupReply(SendGroupReplyRequest) returns (SendGroupReplyResponse);
+}
+
+// =============================================================================
+// SlipVerificationStatus — outcome of slip verification.
+// =============================================================================
+
+// SlipVerificationStatus represents the outcome of verifying a bank transfer
+// slip image through OCR and validation.
+enum SlipVerificationStatus {
+  // SLIP_VERIFICATION_STATUS_UNSPECIFIED is the default zero value. Must not
+  // be used in valid responses.
+  SLIP_VERIFICATION_STATUS_UNSPECIFIED = 0;
+
+  // SLIP_VERIFICATION_STATUS_VALID means the slip was successfully verified
+  // as a genuine bank transfer slip with extractable transaction data.
+  SLIP_VERIFICATION_STATUS_VALID = 1;
+
+  // SLIP_VERIFICATION_STATUS_INVALID means the slip failed verification.
+  // This could be due to a forged slip, unreadable image, unsupported
+  // bank format, or mismatched transaction data.
+  SLIP_VERIFICATION_STATUS_INVALID = 2;
+
+  // SLIP_VERIFICATION_STATUS_ERROR means the verification process
+  // encountered a technical error (e.g. OCR service down, Telegram API
+  // failure). The slip should be retried or verified manually.
+  SLIP_VERIFICATION_STATUS_ERROR = 3;
+}
+
+// =============================================================================
+// VerifySlip messages
+// =============================================================================
+
+// VerifySlipRequest carries the Telegram file and chat context needed to
+// download and verify a bank transfer slip image.
+message VerifySlipRequest {
+  // file_id is the Telegram file_id of the photo to verify. This ID is
+  // obtained from the Telegram update when a photo message is received.
+  // The service uses this to download the file from Telegram's API.
+  // Required field — must not be empty.
+  string file_id = 1;
+
+  // chat_id is the Telegram chat ID where the slip was sent. Used to
+  // send the verification result back to the correct chat.
+  // Required field — must not be empty.
+  string chat_id = 2;
+
+  // message_id is the Telegram message ID of the original photo message.
+  // Used for reply threading so the verification result appears as a
+  // reply to the original slip image.
+  // Optional — if zero, the reply is sent without threading.
+  int64 message_id = 3;
+}
+
+// VerifySlipResponse contains the outcome of the slip verification process,
+// including extracted transaction data when verification succeeds.
+message VerifySlipResponse {
+  // status is the high-level verification outcome: valid, invalid, or error.
+  SlipVerificationStatus status = 1;
+
+  // bank_code is the bank identifier extracted from the slip (e.g. "KBANK",
+  // "SCB"). Empty if the slip could not be parsed.
+  string bank_code = 2;
+
+  // amount is the transaction amount extracted from the slip. Stored as a
+  // decimal string for precision. Empty if the slip could not be parsed.
+  string amount = 3;
+
+  // sender_name is the name of the person who made the transfer, as
+  // extracted from the slip. Empty if not extractable.
+  string sender_name = 4;
+
+  // reference is the bank transaction reference number extracted from the
+  // slip. Empty if not extractable.
+  string reference = 5;
+
+  // transfer_date is the date/time of the transfer as shown on the slip,
+  // in ISO 8601 format. Empty if not extractable.
+  string transfer_date = 6;
+
+  // message is a human-readable description of the verification outcome.
+  // Contains error details when status is invalid or error.
+  string message = 7;
+}
+
+// =============================================================================
+// TelegramSendAlert messages
+// =============================================================================
+
+// TelegramSendAlertRequest carries the security alert data to be sent to
+// the admin Telegram channel.
+message TelegramSendAlertRequest {
+  // alert_type is the category of the security alert (e.g. "login_failed",
+  // "emergency_freeze", "sms_spoofing", "daily_limit_reached",
+  // "suspicious_activity"). Must match one of the defined alert types.
+  // Required field — must not be empty.
+  string alert_type = 1;
+
+  // details is a key-value map of alert-specific information. Keys and
+  // values vary by alert type. For example:
+  //   - login_failed: {"ip": "1.2.3.4", "email": "admin@example.com",
+  //     "attempts": "5"}
+  //   - emergency_freeze: {"merchant_id": "uuid", "reason": "..."}
+  //   - sms_spoofing: {"sender": "+66...", "message": "..."}
+  map<string, string> details = 2;
+}
+
+// TelegramSendAlertResponse confirms that the alert was sent to the
+// admin Telegram channel.
+message TelegramSendAlertResponse {
+  // status is a confirmation string, typically "alert_sent".
+  string status = 1;
+
+  // message is a human-readable confirmation message.
+  string message = 2;
+}
+
+// =============================================================================
+// SendGroupReply messages
+// =============================================================================
+
+// SendGroupReplyRequest carries the data needed to send a text reply to
+// a specific Telegram group chat.
+message SendGroupReplyRequest {
+  // chat_id is the Telegram chat ID of the group to reply in.
+  // Required field — must not be empty.
+  string chat_id = 1;
+
+  // message is the text content to send. Supports Telegram MarkdownV2
+  // formatting for rich text display.
+  // Required field — must not be empty.
+  string message = 2;
+
+  // reply_to_message_id is the Telegram message ID to reply to. When set,
+  // the message appears as a threaded reply to the original message.
+  // Optional — if zero, the message is sent without threading.
+  int64 reply_to_message_id = 3;
+}
+
+// SendGroupReplyResponse confirms that the reply was sent.
+message SendGroupReplyResponse {
+  // status is a confirmation string, typically "sent".
+  string status = 1;
+}

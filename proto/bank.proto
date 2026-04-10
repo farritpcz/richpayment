@@ -1,0 +1,482 @@
+// =============================================================================
+// bank.proto — BankService gRPC definitions for the RichPayment platform.
+//
+// The BankService manages the platform's receiving bank account pool, daily
+// monitoring counters, and fund transfer operations. It provides three main
+// functional areas:
+//
+//   1. Pool Management: selecting the best bank account for incoming deposits,
+//      rebuilding the Redis-based account pool, and auto-switching accounts
+//      when daily limits are reached.
+//
+//   2. Monitoring: tracking daily received amounts per account, resetting
+//      counters at midnight, and providing account status dashboards.
+//
+//   3. Transfer Management: creating, completing, and listing fund transfers
+//      from receiving accounts to holding accounts.
+//
+// Inter-service communication:
+//   order-service     -> bank-service (select account for deposit)
+//   parser-service    -> bank-service (update daily received on match)
+//   scheduler-service -> bank-service (reset daily counters at midnight)
+//   admin-dashboard   -> bank-service (view accounts, manage transfers)
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+import "google/protobuf/timestamp.proto";
+import "proto/common.proto";
+
+// =============================================================================
+// BankService — RPC definitions for bank account and transfer management.
+// =============================================================================
+
+// BankService provides bank account pool management, monitoring, and fund
+// transfer operations for the RichPayment platform. It manages the lifecycle
+// of receiving bank accounts used by merchants to accept deposits, and
+// handles the transfer of accumulated funds to secure holding accounts.
+//
+// Account selection uses a weighted algorithm that considers:
+//   - Daily received amount vs. configured daily limit.
+//   - Number of pending orders assigned to each account.
+//   - Account priority and status (active/disabled).
+service BankService {
+  // ---------------------------------------------------------------------------
+  // Pool Management RPCs
+  // ---------------------------------------------------------------------------
+
+  // SelectAccount picks the best available bank account for an incoming
+  // deposit from the specified merchant. The selection algorithm considers
+  // daily limits, pending order counts, and account priorities.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing merchant_id.
+  //   - UNAVAILABLE: no bank accounts available in the pool.
+  rpc SelectAccount(SelectAccountRequest) returns (SelectAccountResponse);
+
+  // GetAccountStatus retrieves the current status of a single bank account,
+  // including daily received amounts, remaining capacity, and utilisation
+  // percentage.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no account exists with the given ID.
+  //   - INVALID_ARGUMENT: invalid UUID format.
+  rpc GetAccountStatus(GetAccountStatusRequest) returns (AccountStatus);
+
+  // ListAccounts returns all bank accounts with their current status,
+  // including computed fields like remaining capacity and utilisation.
+  // Used by the admin dashboard for bank account monitoring.
+  //
+  // Error codes:
+  //   - INTERNAL: database query failed.
+  rpc ListAccounts(ListAccountsRequest) returns (ListAccountsResponse);
+
+  // UpdateDailyReceived increments the daily received counter for a bank
+  // account after a deposit is matched. Called by the order-service each
+  // time a deposit matches to track how close each account is to its limit.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no account exists with the given ID.
+  //   - INVALID_ARGUMENT: missing bank_account_id or invalid amount.
+  //   - INTERNAL: counter update failed.
+  rpc UpdateDailyReceived(UpdateDailyReceivedRequest) returns (UpdateDailyReceivedResponse);
+
+  // AutoSwitch disables a bank account that has reached its daily limit
+  // or encountered issues, and reassigns all affected merchants to other
+  // available accounts. This is triggered automatically by the monitoring
+  // system or manually by an admin.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no account exists with the given ID.
+  //   - INVALID_ARGUMENT: missing bank_account_id.
+  //   - INTERNAL: switch operation failed.
+  rpc AutoSwitch(AutoSwitchRequest) returns (AutoSwitchResponse);
+
+  // ResetDailyCounters resets all daily receiving counters to zero. Called
+  // by the scheduler-service at midnight (Thailand time) to prepare all
+  // accounts for the next business day.
+  //
+  // Error codes:
+  //   - INTERNAL: counter reset failed.
+  rpc ResetDailyCounters(ResetDailyCountersRequest) returns (ResetDailyCountersResponse);
+
+  // ---------------------------------------------------------------------------
+  // Transfer Management RPCs
+  // ---------------------------------------------------------------------------
+
+  // CreateTransfer initiates a new fund transfer from a receiving bank
+  // account to a pre-approved holding account. The transfer is created
+  // in "pending" status and must be completed by an admin after the
+  // actual bank transfer is executed.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing required fields.
+  //   - NOT_FOUND: source account or holding account not found.
+  //   - FAILED_PRECONDITION: insufficient balance in source account.
+  rpc CreateTransfer(CreateTransferRequest) returns (Transfer);
+
+  // CompleteTransfer marks a pending transfer as completed with the
+  // bank-provided reference number. Called after the actual bank transfer
+  // has been executed and confirmed.
+  //
+  // Error codes:
+  //   - NOT_FOUND: transfer does not exist.
+  //   - FAILED_PRECONDITION: transfer is not in "pending" status.
+  //   - INVALID_ARGUMENT: missing reference.
+  rpc CompleteTransfer(CompleteTransferRequest) returns (CompleteTransferResponse);
+
+  // ListTransfers returns a paginated list of fund transfers with optional
+  // filtering. Used by the admin dashboard for transfer monitoring.
+  //
+  // Error codes:
+  //   - INTERNAL: database query failed.
+  rpc ListTransfers(ListTransfersRequest) returns (ListTransfersResponse);
+}
+
+// =============================================================================
+// BankAccountStatus — lifecycle states for bank accounts.
+// =============================================================================
+
+// BankAccountStatus represents the current operational state of a receiving
+// bank account in the platform's account pool.
+enum BankAccountStatus {
+  // BANK_ACCOUNT_STATUS_UNSPECIFIED is the default zero value. Must not be
+  // used in valid requests.
+  BANK_ACCOUNT_STATUS_UNSPECIFIED = 0;
+
+  // BANK_ACCOUNT_STATUS_ACTIVE means the account is available for receiving
+  // deposits and is included in the selection pool.
+  BANK_ACCOUNT_STATUS_ACTIVE = 1;
+
+  // BANK_ACCOUNT_STATUS_DISABLED means the account has been temporarily
+  // disabled (e.g. daily limit reached, maintenance). It is excluded from
+  // the selection pool but retains its configuration.
+  BANK_ACCOUNT_STATUS_DISABLED = 2;
+
+  // BANK_ACCOUNT_STATUS_SUSPENDED means the account has been suspended
+  // by an admin for investigation or compliance reasons.
+  BANK_ACCOUNT_STATUS_SUSPENDED = 3;
+}
+
+// =============================================================================
+// TransferStatus — lifecycle states for fund transfers.
+// =============================================================================
+
+// TransferStatus represents the current state of a fund transfer from a
+// receiving bank account to a holding account.
+enum TransferStatus {
+  // TRANSFER_STATUS_UNSPECIFIED is the default zero value. Must not be used.
+  TRANSFER_STATUS_UNSPECIFIED = 0;
+
+  // TRANSFER_STATUS_PENDING means the transfer has been created in the
+  // system but the actual bank transfer has not been executed yet.
+  TRANSFER_STATUS_PENDING = 1;
+
+  // TRANSFER_STATUS_COMPLETED means the bank transfer has been executed
+  // and confirmed with a reference number.
+  TRANSFER_STATUS_COMPLETED = 2;
+
+  // TRANSFER_STATUS_FAILED means the bank transfer failed. Manual
+  // intervention may be required.
+  TRANSFER_STATUS_FAILED = 3;
+}
+
+// =============================================================================
+// BankAccount — the bank account entity message.
+// =============================================================================
+
+// BankAccount represents a receiving bank account in the platform's pool.
+// Merchants' customers transfer funds to these accounts when making deposits.
+message BankAccount {
+  // id is the unique identifier for this bank account (UUID v4 string).
+  string id = 1;
+
+  // bank_code is the short bank identifier (e.g. "KBANK", "SCB", "BBL").
+  string bank_code = 2;
+
+  // account_number is the bank account number.
+  string account_number = 3;
+
+  // account_name is the registered account holder name.
+  string account_name = 4;
+
+  // promptpay_id is the PromptPay ID associated with this account, if any.
+  // Used for generating QR codes. Empty if not a PromptPay account.
+  string promptpay_id = 5;
+
+  // daily_limit is the maximum amount this account can receive per day
+  // before it is automatically switched out. Stored as a decimal string.
+  string daily_limit = 6;
+
+  // daily_received is the amount received today so far. Stored as a decimal
+  // string. Reset to "0.00" at midnight by the scheduler.
+  string daily_received = 7;
+
+  // priority is the selection weight (higher = preferred). Used by the
+  // account selection algorithm to prefer certain accounts.
+  int32 priority = 8;
+
+  // status is the current operational state of the account.
+  BankAccountStatus status = 9;
+
+  // created_at is when the account was added to the pool (UTC).
+  google.protobuf.Timestamp created_at = 10;
+
+  // updated_at is when the account was last modified (UTC).
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+// =============================================================================
+// AccountStatus — enriched account status for monitoring.
+// =============================================================================
+
+// AccountStatus represents a bank account with computed monitoring fields
+// such as remaining capacity and utilisation percentage. Used by the admin
+// dashboard for real-time account monitoring.
+message AccountStatus {
+  // account is the underlying bank account record.
+  BankAccount account = 1;
+
+  // remaining_capacity is the amount the account can still receive today
+  // before hitting its daily limit. Stored as a decimal string.
+  // remaining_capacity = daily_limit - daily_received.
+  string remaining_capacity = 2;
+
+  // utilisation_pct is the percentage of the daily limit that has been used.
+  // Stored as a decimal string (e.g. "75.50" means 75.5% utilised).
+  string utilisation_pct = 3;
+
+  // pending_order_count is the number of pending deposit orders currently
+  // assigned to this account (waiting for customer transfer).
+  int32 pending_order_count = 4;
+}
+
+// =============================================================================
+// Transfer — the fund transfer entity message.
+// =============================================================================
+
+// Transfer represents a fund transfer from a receiving bank account to a
+// pre-approved holding account. These transfers move accumulated deposits
+// to secure accounts to reduce exposure on receiving accounts.
+message Transfer {
+  // id is the unique identifier for this transfer (UUID v4 string).
+  string id = 1;
+
+  // from_account_id is the UUID of the source receiving bank account.
+  string from_account_id = 2;
+
+  // to_holding_id is the UUID of the destination holding account.
+  string to_holding_id = 3;
+
+  // amount is the transfer amount. Stored as a decimal string.
+  string amount = 4;
+
+  // currency is the ISO 4217 currency code (e.g. "THB").
+  string currency = 5;
+
+  // status is the current state of the transfer (pending, completed, failed).
+  TransferStatus status = 6;
+
+  // reference is the bank-provided reference/confirmation number.
+  // Empty string until the transfer is completed.
+  string reference = 7;
+
+  // admin_id is the UUID of the admin who initiated this transfer.
+  string admin_id = 8;
+
+  // created_at is when the transfer was created (UTC).
+  google.protobuf.Timestamp created_at = 9;
+
+  // completed_at is when the transfer was marked as completed (UTC).
+  // Not set until completion.
+  google.protobuf.Timestamp completed_at = 10;
+}
+
+// =============================================================================
+// SelectAccount messages
+// =============================================================================
+
+// SelectAccountRequest identifies the merchant for which a bank account
+// should be selected for an incoming deposit.
+message SelectAccountRequest {
+  // merchant_id is the UUID of the merchant requesting a bank account.
+  // Required field — must be a valid UUID string.
+  string merchant_id = 1;
+}
+
+// SelectAccountResponse returns the selected bank account for the deposit.
+message SelectAccountResponse {
+  // account is the selected bank account with all fields populated.
+  BankAccount account = 1;
+}
+
+// =============================================================================
+// GetAccountStatus messages
+// =============================================================================
+
+// GetAccountStatusRequest identifies the bank account to query.
+message GetAccountStatusRequest {
+  // id is the UUID of the bank account to query.
+  // Required field — must be a valid UUID string.
+  string id = 1;
+}
+
+// =============================================================================
+// ListAccounts messages
+// =============================================================================
+
+// ListAccountsRequest carries optional filter parameters for listing
+// bank accounts. An empty request returns all accounts.
+message ListAccountsRequest {
+  // status_filter is an optional filter to return only accounts with the
+  // specified status. If BANK_ACCOUNT_STATUS_UNSPECIFIED, all accounts
+  // are returned regardless of status.
+  BankAccountStatus status_filter = 1;
+}
+
+// ListAccountsResponse contains the full list of bank accounts with
+// their monitoring status.
+message ListAccountsResponse {
+  // accounts is the list of bank account status records.
+  repeated AccountStatus accounts = 1;
+}
+
+// =============================================================================
+// UpdateDailyReceived messages
+// =============================================================================
+
+// UpdateDailyReceivedRequest increments the daily received counter for a
+// bank account after a deposit is matched.
+message UpdateDailyReceivedRequest {
+  // bank_account_id is the UUID of the account that received a deposit.
+  // Required field — must be a valid UUID string.
+  string bank_account_id = 1;
+
+  // amount is the deposit amount to add to the daily counter.
+  // Stored as a decimal string. Must be positive.
+  // Required field.
+  string amount = 2;
+}
+
+// UpdateDailyReceivedResponse confirms the counter was updated.
+message UpdateDailyReceivedResponse {
+  // status is a confirmation string, typically "updated".
+  string status = 1;
+}
+
+// =============================================================================
+// AutoSwitch messages
+// =============================================================================
+
+// AutoSwitchRequest triggers the automatic disabling and reassignment of
+// a bank account that has reached its limit or encountered issues.
+message AutoSwitchRequest {
+  // bank_account_id is the UUID of the account to disable and switch out.
+  // Required field — must be a valid UUID string.
+  string bank_account_id = 1;
+
+  // reason is a human-readable explanation for why the switch is needed
+  // (e.g. "daily_limit_reached", "maintenance", "compliance_hold").
+  // Required field — must not be empty.
+  string reason = 2;
+}
+
+// AutoSwitchResponse confirms that the account was disabled and merchants
+// were reassigned to other accounts.
+message AutoSwitchResponse {
+  // status is a confirmation string, typically "switched".
+  string status = 1;
+
+  // message is a human-readable description of the switch outcome.
+  string message = 2;
+}
+
+// =============================================================================
+// ResetDailyCounters messages
+// =============================================================================
+
+// ResetDailyCountersRequest triggers the midnight counter reset for all
+// bank accounts. No parameters are required.
+message ResetDailyCountersRequest {}
+
+// ResetDailyCountersResponse confirms that all counters were reset.
+message ResetDailyCountersResponse {
+  // status is a confirmation string, typically "counters_reset".
+  string status = 1;
+
+  // accounts_reset is the number of accounts whose counters were reset.
+  int32 accounts_reset = 2;
+}
+
+// =============================================================================
+// CreateTransfer messages
+// =============================================================================
+
+// CreateTransferRequest contains all fields required to initiate a new
+// fund transfer from a receiving account to a holding account.
+message CreateTransferRequest {
+  // from_account_id is the UUID of the source receiving bank account.
+  // Required field — must be a valid UUID string.
+  string from_account_id = 1;
+
+  // to_holding_id is the UUID of the pre-approved destination holding
+  // account. Required field — must be a valid UUID string.
+  string to_holding_id = 2;
+
+  // amount is the transfer amount as a Money message.
+  // The amount must be positive.
+  // Required field.
+  Money amount = 3;
+
+  // admin_id is the UUID of the admin initiating the transfer.
+  // Required field — must be a valid UUID string.
+  string admin_id = 4;
+}
+
+// =============================================================================
+// CompleteTransfer messages
+// =============================================================================
+
+// CompleteTransferRequest marks a pending transfer as completed with the
+// bank reference number.
+message CompleteTransferRequest {
+  // transfer_id is the UUID of the transfer to complete.
+  // Required field — must be a valid UUID string.
+  string transfer_id = 1;
+
+  // reference is the bank-provided reference/confirmation number.
+  // Required field — must not be empty.
+  string reference = 2;
+}
+
+// CompleteTransferResponse confirms that the transfer was completed.
+message CompleteTransferResponse {
+  // status is a confirmation string, typically "completed".
+  string status = 1;
+}
+
+// =============================================================================
+// ListTransfers messages
+// =============================================================================
+
+// ListTransfersRequest carries pagination parameters for listing transfers.
+message ListTransfersRequest {
+  // pagination contains the page number and page size.
+  // Defaults to page 1, limit 20 if not provided.
+  PaginationRequest pagination = 1;
+}
+
+// ListTransfersResponse contains the paginated list of transfers and
+// pagination metadata.
+message ListTransfersResponse {
+  // transfers is the list of transfer records for the requested page.
+  repeated Transfer transfers = 1;
+
+  // pagination contains metadata about the total count and current page.
+  PaginationResponse pagination = 2;
+}

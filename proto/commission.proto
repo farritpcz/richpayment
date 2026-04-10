@@ -1,0 +1,384 @@
+// =============================================================================
+// commission.proto — CommissionService gRPC definitions for the RichPayment
+// platform.
+//
+// The CommissionService handles the calculation and recording of transaction
+// fee splits among the system, agents, and partners. It also provides
+// aggregated summary queries for daily and monthly commission reporting.
+//
+// Commission hierarchy: Partner -> Agent -> Merchant -> System
+//   - The merchant pays a total fee percentage on each transaction.
+//   - The agent receives a configured percentage of the transaction amount.
+//   - The partner receives a configured percentage of the transaction amount.
+//   - The system receives the remainder (total fee - agent - partner).
+//
+// Inter-service communication:
+//   order-service      -> commission-service (record deposit commission)
+//   withdrawal-service -> commission-service (record withdrawal commission)
+//   commission-service -> wallet-service     (credit agent/partner wallets)
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+import "google/protobuf/timestamp.proto";
+import "proto/common.proto";
+
+// =============================================================================
+// CommissionService — RPC definitions for commission operations.
+// =============================================================================
+
+// CommissionService provides commission calculation, recording, and reporting
+// operations for the RichPayment platform. Every transaction (deposit or
+// withdrawal) generates a commission record that splits the merchant's fee
+// among the system, agent, and partner.
+//
+// The service is called internally by the order-service and withdrawal-service
+// when transactions complete. The summary RPCs are used by the admin dashboard
+// for commission reporting and reconciliation.
+service CommissionService {
+  // Calculate computes the commission split for a transaction without
+  // persisting it. This is a dry-run operation useful for previewing
+  // fee breakdowns before a transaction completes.
+  //
+  // Formula:
+  //   total_fee     = transaction_amount * merchant_fee_pct
+  //   agent_share   = transaction_amount * agent_commission_pct
+  //   partner_share = transaction_amount * partner_commission_pct
+  //   system_share  = total_fee - agent_share - partner_share
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing required fields or invalid amounts.
+  //   - FAILED_PRECONDITION: agent_pct + partner_pct > merchant_fee_pct.
+  rpc Calculate(CalculateCommissionRequest) returns (CalculateCommissionResponse);
+
+  // Record calculates the commission split AND persists it to the database,
+  // then credits the agent and partner wallets. This is the primary RPC
+  // called by order-service and withdrawal-service on transaction completion.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing required fields or invalid amounts.
+  //   - FAILED_PRECONDITION: agent_pct + partner_pct > merchant_fee_pct.
+  //   - INTERNAL: database insert or wallet credit failed.
+  rpc Record(RecordCommissionRequest) returns (RecordCommissionResponse);
+
+  // GetDailySummary returns aggregated commission summaries grouped by day
+  // for a specific owner (agent, partner, or system) within a date range.
+  // Used by the admin dashboard for daily commission reporting.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing required fields or invalid date range.
+  //   - INTERNAL: database query failed.
+  rpc GetDailySummary(GetDailySummaryRequest) returns (GetDailySummaryResponse);
+
+  // GetMonthlySummary returns an aggregated commission summary for a
+  // specific owner for an entire month. Used by the admin dashboard for
+  // monthly reconciliation and payout calculations.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing required fields or invalid month format.
+  //   - INTERNAL: database query failed.
+  rpc GetMonthlySummary(GetMonthlySummaryRequest) returns (GetMonthlySummaryResponse);
+
+  // AggregateDaily triggers the daily commission aggregation job. This
+  // computes and stores pre-aggregated daily summaries from individual
+  // commission records for efficient querying. Typically called by the
+  // scheduler-service at the end of each day.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: invalid date format.
+  //   - INTERNAL: aggregation query or persistence failed.
+  rpc AggregateDaily(AggregateDailyRequest) returns (AggregateDailyResponse);
+}
+
+// =============================================================================
+// Commission — the full commission record message.
+// =============================================================================
+
+// Commission represents a single commission record generated when a
+// transaction (deposit or withdrawal) completes. It captures the full
+// fee breakdown among all parties in the commission hierarchy.
+message Commission {
+  // id is the unique identifier for this commission record (UUID v4 string).
+  string id = 1;
+
+  // transaction_type indicates whether this commission is from a deposit
+  // or withdrawal transaction.
+  TransactionType transaction_type = 2;
+
+  // transaction_id is the UUID of the deposit or withdrawal order that
+  // triggered this commission calculation.
+  string transaction_id = 3;
+
+  // merchant_id is the UUID of the merchant who owns the transaction.
+  string merchant_id = 4;
+
+  // total_fee_amount is the total fee charged to the merchant, calculated
+  // as transaction_amount * merchant_fee_pct. Stored as a decimal string.
+  string total_fee_amount = 5;
+
+  // system_amount is the platform's share of the fee after paying agent
+  // and partner commissions. Stored as a decimal string.
+  // system_amount = total_fee_amount - agent_amount - partner_amount.
+  string system_amount = 6;
+
+  // agent_id is the UUID of the agent who manages this merchant.
+  // Empty string if the merchant has no agent (system-managed).
+  string agent_id = 7;
+
+  // agent_amount is the agent's commission share, calculated as
+  // transaction_amount * agent_commission_pct. Stored as a decimal string.
+  // Zero if there is no agent.
+  string agent_amount = 8;
+
+  // partner_id is the UUID of the partner above the agent.
+  // Empty string if there is no partner in the chain.
+  string partner_id = 9;
+
+  // partner_amount is the partner's commission share, calculated as
+  // transaction_amount * partner_commission_pct. Stored as a decimal string.
+  // Zero if there is no partner.
+  string partner_amount = 10;
+
+  // merchant_fee_pct is the merchant's total fee percentage used for this
+  // calculation. Stored as a decimal string (e.g. "0.025" for 2.5%).
+  string merchant_fee_pct = 11;
+
+  // agent_pct is the agent's commission percentage used for this
+  // calculation. Stored as a decimal string (e.g. "0.005" for 0.5%).
+  string agent_pct = 12;
+
+  // partner_pct is the partner's commission percentage used for this
+  // calculation. Stored as a decimal string (e.g. "0.003" for 0.3%).
+  string partner_pct = 13;
+
+  // currency is the ISO 4217 currency code (e.g. "THB").
+  string currency = 14;
+
+  // created_at is when the commission was calculated and recorded (UTC).
+  google.protobuf.Timestamp created_at = 15;
+}
+
+// =============================================================================
+// CommissionInput — shared input fields for Calculate and Record RPCs.
+// =============================================================================
+
+// CommissionInput holds all the data required to calculate a commission split.
+// It is used as the core payload for both Calculate and Record RPCs.
+message CommissionInput {
+  // transaction_type indicates whether this is a deposit or withdrawal.
+  // Different transaction types may have different fee percentages.
+  // Required field.
+  TransactionType transaction_type = 1;
+
+  // transaction_id is the UUID of the deposit or withdrawal order that
+  // triggered this commission calculation.
+  // Required field — must be a valid UUID string.
+  string transaction_id = 2;
+
+  // merchant_id is the UUID of the merchant who owns the transaction.
+  // Required field — must be a valid UUID string.
+  string merchant_id = 3;
+
+  // transaction_amount is the gross amount of the transaction before any
+  // fees are deducted. This is the base for all percentage calculations.
+  // Stored as a decimal string. Must be positive.
+  // Required field.
+  string transaction_amount = 4;
+
+  // merchant_fee_pct is the total fee percentage configured for this
+  // merchant (e.g. "0.025" means 2.5%). This is the "pie" that gets
+  // split among system, agent, and partner.
+  // Required field.
+  string merchant_fee_pct = 5;
+
+  // agent_id is the UUID of the agent managing this merchant.
+  // Empty string if the merchant has no agent (system-managed merchant).
+  string agent_id = 6;
+
+  // agent_commission_pct is the percentage of the transaction amount that
+  // goes to the agent (e.g. "0.005" means 0.5%). Zero string if no agent.
+  string agent_commission_pct = 7;
+
+  // partner_id is the UUID of the partner above the agent.
+  // Empty string if the agent has no partner or there is no agent.
+  string partner_id = 8;
+
+  // partner_commission_pct is the percentage of the transaction amount
+  // that goes to the partner (e.g. "0.003" means 0.3%). Zero string if
+  // no partner.
+  string partner_commission_pct = 9;
+
+  // currency is the ISO 4217 currency code (e.g. "THB", "USD").
+  // Required field — must not be empty.
+  string currency = 10;
+}
+
+// =============================================================================
+// Calculate messages
+// =============================================================================
+
+// CalculateCommissionRequest carries the input for a dry-run commission
+// calculation (no persistence).
+message CalculateCommissionRequest {
+  // input contains all the data required to calculate the commission split.
+  // Required field.
+  CommissionInput input = 1;
+}
+
+// CalculateCommissionResponse returns the calculated commission breakdown
+// without persisting it.
+message CalculateCommissionResponse {
+  // commission contains the full calculated commission record with all
+  // amounts populated. Note: the id field is not set since this is a
+  // dry-run calculation.
+  Commission commission = 1;
+}
+
+// =============================================================================
+// Record messages
+// =============================================================================
+
+// RecordCommissionRequest carries the input for calculating AND persisting
+// a commission record, plus crediting agent/partner wallets.
+message RecordCommissionRequest {
+  // input contains all the data required to calculate and record the
+  // commission split. Required field.
+  CommissionInput input = 1;
+}
+
+// RecordCommissionResponse returns the persisted commission record.
+message RecordCommissionResponse {
+  // commission contains the full commission record as persisted in the
+  // database, including the generated UUID.
+  Commission commission = 1;
+}
+
+// =============================================================================
+// DailySummary — aggregated commission data for a single day.
+// =============================================================================
+
+// DailySummary represents aggregated commission data for a specific owner
+// on a specific date. It is used in daily and monthly reporting.
+message DailySummary {
+  // summary_date is the date this summary covers, in "YYYY-MM-DD" format.
+  string summary_date = 1;
+
+  // owner_type is the category of the owner (agent, partner, system).
+  OwnerType owner_type = 2;
+
+  // owner_id is the UUID of the owner entity.
+  string owner_id = 3;
+
+  // total_amount is the sum of all commission amounts for this owner on
+  // this date. Stored as a decimal string.
+  string total_amount = 4;
+
+  // transaction_count is the number of transactions that generated
+  // commissions for this owner on this date.
+  int32 transaction_count = 5;
+
+  // deposit_amount is the sum of commissions from deposit transactions.
+  // Stored as a decimal string.
+  string deposit_amount = 6;
+
+  // withdrawal_amount is the sum of commissions from withdrawal transactions.
+  // Stored as a decimal string.
+  string withdrawal_amount = 7;
+
+  // currency is the ISO 4217 currency code (e.g. "THB").
+  string currency = 8;
+}
+
+// =============================================================================
+// GetDailySummary messages
+// =============================================================================
+
+// GetDailySummaryRequest specifies the owner and date range for daily
+// commission summary queries.
+message GetDailySummaryRequest {
+  // owner_type is the category of the owner to query (agent, partner, system).
+  // Required field.
+  OwnerType owner_type = 1;
+
+  // owner_id is the UUID of the owner entity.
+  // Required field — must be a valid UUID string.
+  string owner_id = 2;
+
+  // from_date is the start date of the query range (inclusive), in
+  // "YYYY-MM-DD" format.
+  // Required field.
+  string from_date = 3;
+
+  // to_date is the end date of the query range (inclusive), in
+  // "YYYY-MM-DD" format. Must not be before from_date.
+  // Required field.
+  string to_date = 4;
+}
+
+// GetDailySummaryResponse contains the list of daily summaries matching
+// the query parameters.
+message GetDailySummaryResponse {
+  // summaries is the list of daily commission summaries, one per day
+  // within the requested date range. Days with no commission activity
+  // may be omitted.
+  repeated DailySummary summaries = 1;
+}
+
+// =============================================================================
+// GetMonthlySummary messages
+// =============================================================================
+
+// GetMonthlySummaryRequest specifies the owner and month for a monthly
+// aggregated commission summary query.
+message GetMonthlySummaryRequest {
+  // owner_type is the category of the owner to query (agent, partner, system).
+  // Required field.
+  OwnerType owner_type = 1;
+
+  // owner_id is the UUID of the owner entity.
+  // Required field — must be a valid UUID string.
+  string owner_id = 2;
+
+  // month is the target month in "YYYY-MM" format (e.g. "2024-01").
+  // Required field.
+  string month = 3;
+}
+
+// GetMonthlySummaryResponse contains the aggregated commission summary
+// for the specified owner and month.
+message GetMonthlySummaryResponse {
+  // summary contains the aggregated commission data for the entire month.
+  // If no commission activity occurred during the month, the amounts will
+  // be zero.
+  DailySummary summary = 1;
+}
+
+// =============================================================================
+// AggregateDaily messages
+// =============================================================================
+
+// AggregateDailyRequest triggers the daily commission aggregation job
+// for a specific date. This pre-computes summary rows for efficient querying.
+message AggregateDailyRequest {
+  // date is the target date to aggregate, in "YYYY-MM-DD" format.
+  // Required field. Typically yesterday's date when called by the scheduler.
+  string date = 1;
+}
+
+// AggregateDailyResponse confirms that the daily aggregation completed.
+message AggregateDailyResponse {
+  // status is a confirmation string, typically "aggregated".
+  string status = 1;
+
+  // records_processed is the number of individual commission records that
+  // were aggregated into summary rows.
+  int32 records_processed = 2;
+
+  // message is a human-readable confirmation message.
+  string message = 3;
+}

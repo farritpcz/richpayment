@@ -1,0 +1,163 @@
+// =============================================================================
+// scheduler.proto — SchedulerService gRPC definitions for the RichPayment
+// platform.
+//
+// The SchedulerService manages cron-based scheduled jobs that perform
+// periodic maintenance and aggregation tasks across the platform. It provides
+// both an internal API for programmatic job triggering and a status endpoint
+// for monitoring dashboards.
+//
+// Registered jobs include:
+//   - expire_pending_orders: marks deposit orders as expired after their
+//     deadline passes (runs every minute).
+//   - reset_daily_counters: resets bank account daily receiving counters
+//     at midnight Thailand time.
+//   - aggregate_commissions: pre-computes daily commission summary rows
+//     for efficient reporting queries (runs at 00:30 daily).
+//   - check_partitions: verifies PostgreSQL table partitions exist for
+//     upcoming months (runs daily).
+//   - retry_webhooks: retries failed webhook deliveries with exponential
+//     backoff (runs every 5 minutes).
+//
+// Inter-service communication:
+//   scheduler-service -> order-service        (expire pending orders)
+//   scheduler-service -> bank-service         (reset daily counters)
+//   scheduler-service -> commission-service   (aggregate daily commissions)
+//   scheduler-service -> notification-service (retry failed webhooks)
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// SchedulerService — RPC definitions for scheduled job management.
+// =============================================================================
+
+// SchedulerService provides scheduled job management operations for the
+// RichPayment platform. It allows operators to manually trigger jobs and
+// monitor the scheduler's activity through a status dashboard.
+//
+// The scheduler uses a cron-based engine that runs jobs at configured
+// intervals. Each job is protected against concurrent execution — if a
+// job is still running from a previous invocation, the next trigger is
+// skipped to prevent duplicate processing.
+service SchedulerService {
+  // RunJob manually triggers a named scheduled job, regardless of its
+  // normal cron schedule. This is useful for testing, recovery, or manual
+  // intervention by operators. The job runs in a background goroutine and
+  // the RPC returns immediately after starting it.
+  //
+  // If the job is already running from a previous invocation, the request
+  // is rejected to prevent concurrent execution.
+  //
+  // Error codes:
+  //   - NOT_FOUND: no job exists with the given name.
+  //   - FAILED_PRECONDITION: job is already running.
+  //   - INVALID_ARGUMENT: job_name is empty.
+  rpc RunJob(RunJobRequest) returns (RunJobResponse);
+
+  // GetStatus returns a snapshot of all registered jobs and their current
+  // state, including last run time, next scheduled run time, whether each
+  // job is currently executing, and the last execution result. Used by
+  // monitoring dashboards and alerting systems.
+  //
+  // Error codes:
+  //   - INTERNAL: failed to retrieve job status.
+  rpc GetStatus(GetSchedulerStatusRequest) returns (GetSchedulerStatusResponse);
+}
+
+// =============================================================================
+// JobInfo — status information for a single scheduled job.
+// =============================================================================
+
+// JobInfo represents the current state and metadata of a single scheduled
+// job in the cron scheduler. It provides all the information needed for
+// monitoring dashboards to track the scheduler's activity.
+message JobInfo {
+  // name is the unique identifier for this job (e.g. "expire_pending_orders",
+  // "reset_daily_counters", "aggregate_commissions").
+  string name = 1;
+
+  // cron_expression is the cron schedule for this job (e.g. "*/1 * * * *"
+  // for every minute, "0 0 * * *" for midnight daily). Uses standard
+  // 5-field cron format: minute hour day_of_month month day_of_week.
+  string cron_expression = 2;
+
+  // description is a human-readable description of what this job does.
+  string description = 3;
+
+  // is_running indicates whether this job is currently executing. When true,
+  // the job will not be triggered again until the current execution finishes.
+  bool is_running = 4;
+
+  // last_run_at is the timestamp of the last execution start (UTC). Not set
+  // if the job has never been executed since the scheduler started.
+  google.protobuf.Timestamp last_run_at = 5;
+
+  // last_duration_ms is the duration of the last execution in milliseconds.
+  // Zero if the job has never been executed.
+  int64 last_duration_ms = 6;
+
+  // last_error is the error message from the last execution, if it failed.
+  // Empty string if the last execution succeeded or the job has never run.
+  string last_error = 7;
+
+  // next_run_at is the timestamp of the next scheduled execution (UTC).
+  // Computed from the cron expression.
+  google.protobuf.Timestamp next_run_at = 8;
+}
+
+// =============================================================================
+// RunJob messages
+// =============================================================================
+
+// RunJobRequest identifies the job to trigger manually.
+message RunJobRequest {
+  // job_name is the unique name of the scheduled job to trigger.
+  // Must match one of the registered job names (e.g. "expire_pending_orders",
+  // "reset_daily_counters", "aggregate_commissions", "check_partitions",
+  // "retry_webhooks").
+  // Required field — must not be empty.
+  string job_name = 1;
+}
+
+// RunJobResponse confirms that the job was triggered successfully.
+message RunJobResponse {
+  // status indicates the trigger outcome. Possible values:
+  //   - "job_triggered": the job was found and started in the background.
+  //   - "already_running": the job is currently executing from a previous
+  //     invocation and was not started again.
+  string status = 1;
+
+  // job_name echoes back the name of the triggered job.
+  string job_name = 2;
+
+  // message is a human-readable confirmation message.
+  string message = 3;
+}
+
+// =============================================================================
+// GetStatus messages
+// =============================================================================
+
+// GetSchedulerStatusRequest queries the current state of all scheduled jobs.
+// No parameters are required — the full job list is always returned.
+message GetSchedulerStatusRequest {}
+
+// GetSchedulerStatusResponse contains the full list of registered jobs
+// with their current execution state and scheduling metadata.
+message GetSchedulerStatusResponse {
+  // service is the name of the scheduler service, typically
+  // "scheduler-service". Included for service identification in monitoring.
+  string service = 1;
+
+  // jobs is the list of all registered scheduled jobs with their current
+  // state. The list is ordered by next scheduled run time (soonest first).
+  repeated JobInfo jobs = 2;
+}

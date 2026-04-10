@@ -1,0 +1,142 @@
+// =============================================================================
+// parser.proto — ParserService gRPC definitions for the RichPayment platform.
+//
+// The ParserService processes incoming SMS bank notifications to extract
+// transaction data and match them against pending deposit orders. It is
+// the primary mechanism by which deposits are automatically confirmed.
+//
+// SMS processing pipeline:
+//   1. Anti-spoofing: verify the sender is a known bank.
+//   2. Timestamp validation: reject stale/replayed messages.
+//   3. Parser lookup: find the correct bank-specific parser.
+//   4. Message parsing: extract amount, sender name, reference.
+//   5. Bank account identification: map sender to internal account.
+//   6. Persistence: store the SMS record for audit trail.
+//   7. Order matching: find a pending order with matching amount.
+//
+// Inter-service communication:
+//   SMS gateway     -> parser-service (incoming SMS webhook)
+//   parser-service  -> order-service  (match deposit on success)
+//   parser-service  -> bank-service   (update daily received counter)
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+import "google/protobuf/timestamp.proto";
+
+// =============================================================================
+// ParserService — RPC definitions for SMS parsing and order matching.
+// =============================================================================
+
+// ParserService provides SMS parsing and deposit order matching operations.
+// When an SMS arrives from a bank notification gateway, this service processes
+// it through a multi-step validation and parsing pipeline, then attempts to
+// match the extracted transaction data against pending deposit orders.
+//
+// The service supports multiple Thai banks (KBANK, SCB, BBL, KTB, BAY, etc.)
+// with bank-specific parsers that understand each bank's SMS format.
+service ParserService {
+  // ProcessSMS executes the full SMS processing pipeline: validation,
+  // parsing, persistence, and order matching. This is the primary RPC
+  // called by the SMS gateway webhook handler.
+  //
+  // The pipeline validates anti-spoofing (sender verification), checks
+  // timestamp freshness (replay protection), parses the SMS body to
+  // extract transaction data, persists the record, and attempts to
+  // match it against a pending deposit order.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing required fields.
+  //   - FAILED_PRECONDITION: unknown sender, stale SMS, or parse failure.
+  //   - INTERNAL: database or Redis failure during persistence/matching.
+  rpc ProcessSMS(ProcessSMSRequest) returns (ProcessSMSResponse);
+}
+
+// =============================================================================
+// SMSMatchStatus — outcome of processing a single SMS message.
+// =============================================================================
+
+// SMSMatchStatus represents the high-level outcome of processing a single
+// SMS message through the parsing and matching pipeline.
+enum SMSMatchStatus {
+  // SMS_MATCH_STATUS_UNSPECIFIED is the default zero value. Must not be
+  // used in valid responses.
+  SMS_MATCH_STATUS_UNSPECIFIED = 0;
+
+  // SMS_MATCH_STATUS_MATCHED indicates the SMS was successfully parsed
+  // and matched to a pending deposit order.
+  SMS_MATCH_STATUS_MATCHED = 1;
+
+  // SMS_MATCH_STATUS_UNMATCHED indicates the SMS was valid and parsed,
+  // but no pending order was found for the extracted amount and bank
+  // account. The SMS is stored for manual reconciliation.
+  SMS_MATCH_STATUS_UNMATCHED = 2;
+
+  // SMS_MATCH_STATUS_ERROR indicates a processing error occurred. This
+  // could be an anti-spoofing rejection, timestamp validation failure,
+  // parse error, or infrastructure failure (DB/Redis down).
+  SMS_MATCH_STATUS_ERROR = 3;
+}
+
+// =============================================================================
+// ProcessSMS messages
+// =============================================================================
+
+// ProcessSMSRequest carries the raw SMS data received from the bank
+// notification gateway. This is the input to the full parsing pipeline.
+message ProcessSMSRequest {
+  // sender_number is the phone number or alphanumeric sender ID that
+  // delivered the SMS (e.g. "KBANK", "+66812345678"). Used for anti-
+  // spoofing validation and bank identification.
+  // Required field — must not be empty.
+  string sender_number = 1;
+
+  // raw_message is the full, unmodified SMS body text as received from
+  // the gateway. This is passed to the bank-specific parser for data
+  // extraction.
+  // Required field — must not be empty.
+  string raw_message = 2;
+
+  // received_at is the timestamp when the SMS gateway received the
+  // message. Used for timestamp validation (replay protection). Messages
+  // older than 5 minutes are rejected to prevent replay attacks.
+  // Required field.
+  google.protobuf.Timestamp received_at = 3;
+}
+
+// ProcessSMSResponse contains the outcome of the SMS processing pipeline,
+// including the match status, extracted data, and any matched order info.
+message ProcessSMSResponse {
+  // status is the high-level outcome of the SMS processing pipeline:
+  // matched, unmatched, or error.
+  SMSMatchStatus status = 1;
+
+  // sms_id is the UUID assigned to the persisted SMS record in the
+  // database. Useful for tracing and support investigations.
+  // Empty string if the SMS was rejected before persistence (e.g.
+  // anti-spoofing or timestamp validation failure).
+  string sms_id = 2;
+
+  // order_id is populated only when status == SMS_MATCH_STATUS_MATCHED.
+  // It contains the UUID of the deposit order that was matched.
+  // Empty string when no match was found.
+  string order_id = 3;
+
+  // bank_code is the short bank identifier extracted from the SMS
+  // (e.g. "KBANK", "SCB", "BBL"). Empty if the SMS could not be parsed.
+  string bank_code = 4;
+
+  // amount is the transaction amount extracted from the SMS body.
+  // Stored as a decimal string for precision (e.g. "5000.00").
+  // Empty string if the SMS could not be parsed.
+  string amount = 5;
+
+  // message is a human-readable description of the processing outcome.
+  // Useful for logging, debugging, and support investigations.
+  string message = 6;
+}

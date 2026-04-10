@@ -1,0 +1,396 @@
+// =============================================================================
+// wallet.proto — WalletService gRPC definitions for the RichPayment platform.
+//
+// The WalletService manages all wallet balances, holds, and ledger entries
+// for merchants, agents, partners, and the system. It provides a double-entry
+// bookkeeping ledger for auditability and uses optimistic locking to prevent
+// concurrent balance corruption.
+//
+// This service is called by:
+//   - order-service: to credit merchant wallets on deposit completion.
+//   - withdrawal-service: to hold, release, and debit balances.
+//   - commission-service: to credit agent/partner wallets with commissions.
+//   - gateway-api: to query merchant balance (proxied through the gateway).
+//
+// Package: richpayment.v1
+// =============================================================================
+syntax = "proto3";
+
+package richpayment.v1;
+
+option go_package = "github.com/farritpcz/richpayment/proto/v1;protov1";
+
+import "google/protobuf/timestamp.proto";
+import "proto/common.proto";
+
+// =============================================================================
+// WalletService — RPC definitions for wallet and ledger operations.
+// =============================================================================
+
+// WalletService provides balance management operations for all actor types
+// in the RichPayment platform. Every balance change is recorded as an
+// append-only ledger entry for full auditability.
+//
+// Balance model:
+//   - Balance: total funds in the wallet (including held amounts).
+//   - HoldBalance: funds reserved for pending operations (e.g. withdrawals).
+//   - Available = Balance - HoldBalance: spendable funds.
+service WalletService {
+  // GetBalance retrieves the current balance and hold amount for a wallet
+  // identified by owner_type + owner_id + currency. If the wallet does not
+  // exist, it is auto-created with zero balance.
+  //
+  // Error codes:
+  //   - INVALID_ARGUMENT: missing or invalid parameters.
+  //   - INTERNAL: database error.
+  rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
+
+  // Credit adds funds to a wallet's balance. A ledger entry is created
+  // to record the credit with the specified entry type and reference.
+  //
+  // Error codes:
+  //   - NOT_FOUND: wallet does not exist.
+  //   - INVALID_ARGUMENT: invalid amount or missing fields.
+  //   - INTERNAL: database error or optimistic lock conflict.
+  rpc Credit(CreditRequest) returns (CreditResponse);
+
+  // Debit subtracts funds from a wallet's available balance. A ledger entry
+  // is created to record the debit. Fails if available balance is insufficient.
+  //
+  // Error codes:
+  //   - NOT_FOUND: wallet does not exist.
+  //   - INVALID_ARGUMENT: invalid amount or missing fields.
+  //   - FAILED_PRECONDITION: insufficient available balance.
+  //   - INTERNAL: database error or optimistic lock conflict.
+  rpc Debit(DebitRequest) returns (DebitResponse);
+
+  // Hold reserves funds from a wallet's available balance for a pending
+  // operation (e.g. a withdrawal awaiting approval). The hold_balance is
+  // increased and a ledger entry is recorded.
+  //
+  // Error codes:
+  //   - NOT_FOUND: wallet does not exist.
+  //   - FAILED_PRECONDITION: insufficient available balance.
+  //   - INTERNAL: database error.
+  rpc Hold(HoldRequest) returns (HoldResponse);
+
+  // Release returns previously held funds back to the available balance.
+  // Used when a withdrawal is rejected or fails. The hold_balance is
+  // decreased and a ledger entry is recorded.
+  //
+  // Error codes:
+  //   - NOT_FOUND: wallet does not exist.
+  //   - FAILED_PRECONDITION: hold balance is less than the release amount.
+  //   - INTERNAL: database error.
+  rpc Release(ReleaseRequest) returns (ReleaseResponse);
+}
+
+// =============================================================================
+// LedgerEntryType — categorises individual wallet ledger entries.
+// =============================================================================
+
+// LedgerEntryType categorises individual wallet ledger entries. Every
+// balance change is recorded as a ledger row for auditability and
+// reconciliation.
+enum LedgerEntryType {
+  // LEDGER_ENTRY_TYPE_UNSPECIFIED is the default zero value. Must not be used.
+  LEDGER_ENTRY_TYPE_UNSPECIFIED = 0;
+
+  // LEDGER_ENTRY_TYPE_DEPOSIT_CREDIT records funds added to a wallet
+  // after a deposit settles.
+  LEDGER_ENTRY_TYPE_DEPOSIT_CREDIT = 1;
+
+  // LEDGER_ENTRY_TYPE_WITHDRAWAL_DEBIT records the final deduction when
+  // a withdrawal completes.
+  LEDGER_ENTRY_TYPE_WITHDRAWAL_DEBIT = 2;
+
+  // LEDGER_ENTRY_TYPE_WITHDRAWAL_HOLD records funds moved from available
+  // balance to hold when a withdrawal is first created (pending approval).
+  LEDGER_ENTRY_TYPE_WITHDRAWAL_HOLD = 3;
+
+  // LEDGER_ENTRY_TYPE_WITHDRAWAL_RELEASE records funds returned from hold
+  // to available balance when a withdrawal is rejected or fails.
+  LEDGER_ENTRY_TYPE_WITHDRAWAL_RELEASE = 4;
+
+  // LEDGER_ENTRY_TYPE_FEE_DEBIT records a platform fee deducted from
+  // the merchant's wallet.
+  LEDGER_ENTRY_TYPE_FEE_DEBIT = 5;
+
+  // LEDGER_ENTRY_TYPE_COMMISSION_CREDIT records commission earnings credited
+  // to an agent's or partner's wallet.
+  LEDGER_ENTRY_TYPE_COMMISSION_CREDIT = 6;
+
+  // LEDGER_ENTRY_TYPE_COMMISSION_PAYOUT records a commission payout debit
+  // from the agent's or partner's wallet when they withdraw earnings.
+  LEDGER_ENTRY_TYPE_COMMISSION_PAYOUT = 7;
+
+  // LEDGER_ENTRY_TYPE_ADJUSTMENT records a manual balance adjustment made
+  // by an admin for correction or reconciliation purposes.
+  LEDGER_ENTRY_TYPE_ADJUSTMENT = 8;
+}
+
+// =============================================================================
+// Wallet — the wallet entity message.
+// =============================================================================
+
+// Wallet represents a currency balance held by a merchant, agent, partner,
+// or the system. It tracks the total balance, held amount, and uses
+// optimistic locking to prevent concurrent update conflicts.
+message Wallet {
+  // id is the unique identifier for this wallet (UUID v4 string).
+  string id = 1;
+
+  // owner_type indicates who owns the wallet (merchant, agent, partner, system).
+  OwnerType owner_type = 2;
+
+  // owner_id is the UUID of the owning entity in its respective table.
+  string owner_id = 3;
+
+  // currency is the ISO 4217 currency code (e.g. "THB").
+  string currency = 4;
+
+  // balance is the total wallet balance including held funds.
+  // Stored as a decimal string for precision.
+  string balance = 5;
+
+  // hold_balance is the portion of balance reserved for pending operations.
+  // Available balance = balance - hold_balance.
+  string hold_balance = 6;
+
+  // version is an optimistic-lock counter incremented on every balance update.
+  // Used to detect and prevent concurrent modifications.
+  int64 version = 7;
+
+  // created_at is when the wallet was created (UTC).
+  google.protobuf.Timestamp created_at = 8;
+
+  // updated_at is when the wallet was last modified (UTC).
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// =============================================================================
+// WalletLedger — append-only audit log entry for balance changes.
+// =============================================================================
+
+// WalletLedger is an append-only audit log entry that records every change
+// to a wallet's balance. Each row captures what happened, why (via reference),
+// and the resulting balance after the operation.
+message WalletLedger {
+  // id is the auto-incrementing primary key for ordering entries.
+  int64 id = 1;
+
+  // wallet_id is the UUID of the wallet this entry belongs to.
+  string wallet_id = 2;
+
+  // entry_type categorises the ledger entry (deposit, withdrawal, fee, etc.).
+  LedgerEntryType entry_type = 3;
+
+  // reference_type identifies the source entity type (e.g. "deposit_order",
+  // "withdrawal", "commission").
+  string reference_type = 4;
+
+  // reference_id is the UUID of the source entity that triggered this entry.
+  string reference_id = 5;
+
+  // amount is the signed value of the balance change. Positive for credits,
+  // negative for debits. Stored as a decimal string for precision.
+  string amount = 6;
+
+  // balance_after is the wallet's total balance immediately after this entry
+  // was applied. Stored as a decimal string.
+  string balance_after = 7;
+
+  // description is a human-readable note explaining the entry.
+  string description = 8;
+
+  // created_at is when the ledger entry was created (UTC).
+  google.protobuf.Timestamp created_at = 9;
+}
+
+// =============================================================================
+// GetBalance messages
+// =============================================================================
+
+// GetBalanceRequest identifies the wallet to query by owner type, owner ID,
+// and currency. If the wallet does not exist, it is auto-created with zero balance.
+message GetBalanceRequest {
+  // owner_type is the category of the wallet owner.
+  // Required field — must be a valid OwnerType value.
+  OwnerType owner_type = 1;
+
+  // owner_id is the UUID of the entity that owns the wallet.
+  // Required field — must be a valid UUID string.
+  string owner_id = 2;
+
+  // currency is the ISO 4217 currency code (e.g. "THB").
+  // Required field — must not be empty.
+  string currency = 3;
+}
+
+// GetBalanceResponse contains the wallet balance information.
+message GetBalanceResponse {
+  // wallet_id is the wallet's primary-key UUID.
+  string wallet_id = 1;
+
+  // owner_type is the category of the wallet owner.
+  OwnerType owner_type = 2;
+
+  // owner_id is the UUID of the entity that owns the wallet.
+  string owner_id = 3;
+
+  // currency is the ISO 4217 code for the wallet's denomination.
+  string currency = 4;
+
+  // balance is the total wallet balance (including held funds) as a
+  // decimal string with 2 decimal places (e.g. "10000.50").
+  string balance = 5;
+
+  // hold_balance is the amount reserved for pending operations as a
+  // decimal string with 2 decimal places (e.g. "500.00").
+  string hold_balance = 6;
+}
+
+// =============================================================================
+// Credit messages
+// =============================================================================
+
+// CreditRequest adds funds to a wallet. Each credit creates a corresponding
+// ledger entry for audit trail purposes.
+message CreditRequest {
+  // wallet_id is the UUID of the wallet to credit.
+  // Required field — must be a valid UUID string.
+  string wallet_id = 1;
+
+  // amount is the decimal amount to add to the wallet's balance.
+  // Must be a positive number. Stored as a string for precision.
+  // Required field.
+  string amount = 2;
+
+  // entry_type categorises the credit in the ledger (e.g. "deposit_credit",
+  // "commission_credit"). Required field.
+  LedgerEntryType entry_type = 3;
+
+  // reference_type is a human-readable category for the source of the
+  // credit (e.g. "deposit_order", "commission"). Required field.
+  string reference_type = 4;
+
+  // reference_id is the UUID of the entity that triggered this credit
+  // (e.g. the deposit order ID). Required field.
+  string reference_id = 5;
+
+  // description is an optional free-text note stored in the ledger entry.
+  // Useful for debugging and reconciliation.
+  string description = 6;
+}
+
+// CreditResponse confirms that the credit was applied successfully.
+message CreditResponse {
+  // status is a confirmation string, typically "ok".
+  string status = 1;
+}
+
+// =============================================================================
+// Debit messages
+// =============================================================================
+
+// DebitRequest subtracts funds from a wallet's available balance. The
+// available balance (balance - hold_balance) must be sufficient.
+message DebitRequest {
+  // wallet_id is the UUID of the wallet to debit.
+  // Required field — must be a valid UUID string.
+  string wallet_id = 1;
+
+  // amount is the decimal amount to subtract from the wallet's balance.
+  // Must be a positive number. Stored as a string for precision.
+  // Required field.
+  string amount = 2;
+
+  // entry_type categorises the debit in the ledger (e.g. "withdrawal_debit",
+  // "fee_debit"). Required field.
+  LedgerEntryType entry_type = 3;
+
+  // reference_type is a human-readable category for the debit source
+  // (e.g. "withdrawal_request"). Required field.
+  string reference_type = 4;
+
+  // reference_id is the UUID of the entity that triggered this debit.
+  // Required field.
+  string reference_id = 5;
+
+  // description is an optional free-text note stored in the ledger entry.
+  string description = 6;
+}
+
+// DebitResponse confirms that the debit was applied successfully.
+message DebitResponse {
+  // status is a confirmation string, typically "ok".
+  string status = 1;
+}
+
+// =============================================================================
+// Hold messages
+// =============================================================================
+
+// HoldRequest reserves funds from a wallet's available balance. The held
+// amount is moved from available to hold_balance, preventing it from being
+// spent until released or debited.
+message HoldRequest {
+  // wallet_id is the UUID of the wallet to hold funds in.
+  // Required field — must be a valid UUID string.
+  string wallet_id = 1;
+
+  // amount is the decimal amount to hold. Must be positive.
+  // Required field.
+  string amount = 2;
+
+  // reference_type is a human-readable category for the hold
+  // (e.g. "withdrawal"). Required field.
+  string reference_type = 3;
+
+  // reference_id is the UUID of the entity that triggered this hold
+  // (e.g. the withdrawal request ID). Required field.
+  string reference_id = 4;
+
+  // description is an optional free-text note stored in the ledger entry.
+  string description = 5;
+}
+
+// HoldResponse confirms that the hold was applied successfully.
+message HoldResponse {
+  // status is a confirmation string, typically "ok".
+  string status = 1;
+}
+
+// =============================================================================
+// Release messages
+// =============================================================================
+
+// ReleaseRequest returns previously held funds back to the available balance.
+// Used when a pending withdrawal is rejected or fails.
+message ReleaseRequest {
+  // wallet_id is the UUID of the wallet to release funds from.
+  // Required field — must be a valid UUID string.
+  string wallet_id = 1;
+
+  // amount is the decimal amount to release from hold back to available.
+  // Must be positive and not exceed the current hold_balance.
+  // Required field.
+  string amount = 2;
+
+  // reference_type is a human-readable category for the release
+  // (e.g. "withdrawal_rejection"). Required field.
+  string reference_type = 3;
+
+  // reference_id is the UUID of the entity that triggered this release
+  // (e.g. the withdrawal request ID). Required field.
+  string reference_id = 4;
+
+  // description is an optional free-text note stored in the ledger entry.
+  string description = 5;
+}
+
+// ReleaseResponse confirms that the release was applied successfully.
+message ReleaseResponse {
+  // status is a confirmation string, typically "ok".
+  string status = 1;
+}
