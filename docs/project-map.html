@@ -1,0 +1,1260 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RichPayment - Project Dashboard</title>
+<style>
+/* ============================================================
+   ROOT VARIABLES & RESET
+   ============================================================ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-primary:#0a0e27;
+  --bg-secondary:#111640;
+  --bg-card:#161b4a;
+  --bg-card-hover:#1e2460;
+  --accent:#6366f1;
+  --accent2:#8b5cf6;
+  --accent3:#06b6d4;
+  --text:#e2e8f0;
+  --text-dim:#94a3b8;
+  --text-bright:#f8fafc;
+  --success:#10b981;
+  --warning:#f59e0b;
+  --danger:#ef4444;
+  --info:#3b82f6;
+  --border:rgba(99,102,241,.25);
+  --glow:rgba(99,102,241,.15);
+  --radius:12px;
+  --transition:.3s cubic-bezier(.4,0,.2,1);
+}
+html{scroll-behavior:smooth}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  background:var(--bg-primary);
+  color:var(--text);
+  line-height:1.6;
+  min-height:100vh;
+  overflow-x:hidden;
+}
+
+/* ============================================================
+   ANIMATED BACKGROUND
+   ============================================================ */
+body::before{
+  content:'';position:fixed;top:0;left:0;right:0;bottom:0;z-index:0;
+  background:
+    radial-gradient(ellipse at 20% 50%,rgba(99,102,241,.08) 0%,transparent 50%),
+    radial-gradient(ellipse at 80% 20%,rgba(139,92,246,.08) 0%,transparent 50%),
+    radial-gradient(ellipse at 50% 80%,rgba(6,182,212,.06) 0%,transparent 50%);
+  pointer-events:none;
+}
+
+/* ============================================================
+   LAYOUT
+   ============================================================ */
+.app{position:relative;z-index:1}
+.container{max-width:1400px;margin:0 auto;padding:0 24px}
+
+/* ============================================================
+   HEADER
+   ============================================================ */
+.header{
+  background:linear-gradient(135deg,rgba(17,22,64,.95),rgba(10,14,39,.95));
+  border-bottom:1px solid var(--border);
+  padding:20px 0;
+  position:sticky;top:0;z-index:100;
+  backdrop-filter:blur(20px);
+}
+.header-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px}
+.logo{display:flex;align-items:center;gap:12px}
+.logo-icon{font-size:32px}
+.logo h1{font-size:22px;font-weight:700;
+  background:linear-gradient(135deg,var(--accent),var(--accent2),var(--accent3));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+.logo .subtitle{font-size:12px;color:var(--text-dim);letter-spacing:2px;text-transform:uppercase}
+
+/* ============================================================
+   NAVIGATION TABS
+   ============================================================ */
+.nav{display:flex;gap:4px;flex-wrap:wrap}
+.nav-btn{
+  background:transparent;border:none;color:var(--text-dim);
+  padding:10px 18px;border-radius:8px;cursor:pointer;
+  font-size:14px;font-weight:500;transition:var(--transition);
+  white-space:nowrap;
+}
+.nav-btn:hover{background:rgba(99,102,241,.1);color:var(--text)}
+.nav-btn.active{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;box-shadow:0 4px 15px rgba(99,102,241,.3)}
+
+/* ============================================================
+   TAB CONTENT
+   ============================================================ */
+.tab-content{display:none;padding:32px 0;animation:fadeIn .4s ease}
+.tab-content.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+/* ============================================================
+   SECTION TITLE
+   ============================================================ */
+.section-title{
+  font-size:28px;font-weight:700;margin-bottom:8px;
+  background:linear-gradient(135deg,var(--text-bright),var(--accent3));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+.section-subtitle{color:var(--text-dim);margin-bottom:32px;font-size:15px}
+
+/* ============================================================
+   STAT CARDS (Overview)
+   ============================================================ */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;margin-bottom:40px}
+.stat-card{
+  background:linear-gradient(135deg,var(--bg-card),var(--bg-card-hover));
+  border:1px solid var(--border);border-radius:var(--radius);
+  padding:24px;text-align:center;transition:var(--transition);
+  position:relative;overflow:hidden;
+}
+.stat-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,var(--accent),var(--accent2),var(--accent3));
+}
+.stat-card:hover{transform:translateY(-4px);box-shadow:0 8px 30px var(--glow);border-color:var(--accent)}
+.stat-icon{font-size:36px;margin-bottom:8px}
+.stat-value{font-size:32px;font-weight:800;color:var(--text-bright)}
+.stat-label{font-size:13px;color:var(--text-dim);margin-top:4px;text-transform:uppercase;letter-spacing:1px}
+
+/* ============================================================
+   SERVICE CARDS GRID
+   ============================================================ */
+.services-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:20px}
+.service-card{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:24px;cursor:pointer;transition:var(--transition);position:relative;overflow:hidden;
+}
+.service-card::after{
+  content:'';position:absolute;bottom:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,var(--accent),var(--accent2));
+  transform:scaleX(0);transition:var(--transition);
+}
+.service-card:hover{transform:translateY(-3px);box-shadow:0 8px 25px var(--glow);border-color:var(--accent)}
+.service-card:hover::after{transform:scaleX(1)}
+.service-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.service-emoji{font-size:28px}
+.service-name{font-size:18px;font-weight:700;color:var(--text-bright)}
+.service-port{
+  font-size:12px;background:rgba(99,102,241,.2);color:var(--accent3);
+  padding:2px 10px;border-radius:20px;margin-left:auto;font-family:monospace;
+}
+.service-desc{font-size:14px;color:var(--text-dim);margin-bottom:12px}
+.service-details{
+  max-height:0;overflow:hidden;transition:max-height .4s ease;
+}
+.service-card.expanded .service-details{max-height:600px}
+.service-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.tag{
+  font-size:11px;padding:3px 10px;border-radius:20px;
+  background:rgba(99,102,241,.1);color:var(--accent);border:1px solid rgba(99,102,241,.2);
+}
+.expand-hint{font-size:12px;color:var(--text-dim);text-align:right;margin-top:8px}
+.detail-section{margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
+.detail-section h4{font-size:13px;color:var(--accent3);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}
+.detail-section ul{list-style:none;padding:0}
+.detail-section li{font-size:13px;color:var(--text-dim);padding:3px 0;padding-left:16px;position:relative}
+.detail-section li::before{content:'>';position:absolute;left:0;color:var(--accent)}
+
+/* ============================================================
+   SECURITY LAYERS
+   ============================================================ */
+.security-stack{max-width:800px;margin:0 auto}
+.security-layer{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:20px 24px;margin-bottom:8px;cursor:pointer;transition:var(--transition);
+  display:flex;align-items:center;gap:16px;position:relative;overflow:hidden;
+}
+.security-layer::before{
+  content:'';position:absolute;left:0;top:0;bottom:0;width:4px;
+  background:linear-gradient(180deg,var(--accent),var(--accent2));
+}
+.security-layer:hover{background:var(--bg-card-hover);border-color:var(--accent);transform:translateX(4px)}
+.security-num{
+  width:36px;height:36px;border-radius:50%;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:flex;align-items:center;justify-content:center;
+  font-weight:700;font-size:14px;color:#fff;flex-shrink:0;
+}
+.security-info{flex:1}
+.security-name{font-weight:600;color:var(--text-bright);font-size:15px}
+.security-detail{
+  font-size:13px;color:var(--text-dim);max-height:0;overflow:hidden;
+  transition:max-height .3s ease,margin .3s ease;
+}
+.security-layer.expanded .security-detail{max-height:200px;margin-top:8px}
+.security-icon{font-size:24px}
+
+/* ============================================================
+   FLOW VISUALIZATION
+   ============================================================ */
+.flow-section{margin-bottom:48px}
+.flow-title{font-size:20px;font-weight:700;color:var(--text-bright);margin-bottom:20px;display:flex;align-items:center;gap:10px}
+.flow-steps{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.flow-step{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px 18px;font-size:13px;transition:var(--transition);text-align:center;
+  min-width:120px;position:relative;
+}
+.flow-step.active{
+  background:linear-gradient(135deg,rgba(99,102,241,.3),rgba(139,92,246,.2));
+  border-color:var(--accent);box-shadow:0 0 20px var(--glow);
+  transform:scale(1.05);
+}
+.flow-step .step-emoji{font-size:22px;display:block;margin-bottom:4px}
+.flow-step .step-label{font-size:12px;color:var(--text-dim)}
+.flow-arrow{color:var(--accent);font-size:20px;font-weight:700}
+.flow-controls{margin-top:20px;display:flex;gap:12px}
+.flow-btn{
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  border:none;color:#fff;padding:8px 20px;border-radius:8px;
+  cursor:pointer;font-size:13px;transition:var(--transition);
+}
+.flow-btn:hover{transform:scale(1.05);box-shadow:0 4px 15px rgba(99,102,241,.4)}
+.flow-btn.secondary{background:var(--bg-card);border:1px solid var(--border);color:var(--text)}
+
+/* ============================================================
+   ARCHITECTURE DIAGRAM
+   ============================================================ */
+.arch-container{position:relative;width:100%;overflow-x:auto}
+.arch-svg{width:100%;min-width:900px;height:620px}
+.arch-svg .svc-box{cursor:pointer;transition:all .3s ease}
+.arch-svg .svc-box:hover rect{stroke:var(--accent);stroke-width:2;filter:drop-shadow(0 0 10px rgba(99,102,241,.4))}
+.arch-svg .svc-box text{fill:var(--text-bright);font-size:12px;font-weight:600;pointer-events:none}
+.arch-svg .svc-box .port-text{fill:var(--accent3);font-size:10px}
+.arch-svg .conn-line{stroke:rgba(99,102,241,.3);stroke-width:1.5;fill:none}
+.arch-svg .conn-line.animated{stroke-dasharray:8 4;animation:dashFlow 1.5s linear infinite}
+@keyframes dashFlow{to{stroke-dashoffset:-24}}
+
+.arch-detail-panel{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:var(--bg-secondary);border:1px solid var(--accent);border-radius:var(--radius);
+  padding:32px;max-width:500px;width:90%;z-index:200;
+  box-shadow:0 20px 60px rgba(0,0,0,.6);display:none;
+}
+.arch-detail-panel.show{display:block;animation:fadeIn .3s ease}
+.arch-overlay{
+  position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);
+  z-index:199;display:none;
+}
+.arch-overlay.show{display:block}
+.panel-close{
+  position:absolute;top:12px;right:16px;background:none;border:none;
+  color:var(--text-dim);font-size:24px;cursor:pointer;
+}
+.panel-close:hover{color:var(--text-bright)}
+
+/* ============================================================
+   DATABASE TABLE LIST
+   ============================================================ */
+.db-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:16px}
+.db-table{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:20px;transition:var(--transition);cursor:pointer;
+}
+.db-table:hover{border-color:var(--accent);transform:translateY(-2px)}
+.db-table-name{font-weight:700;color:var(--accent3);font-size:15px;margin-bottom:4px;font-family:monospace}
+.db-table-desc{font-size:13px;color:var(--text-dim);margin-bottom:10px}
+.db-columns{max-height:0;overflow:hidden;transition:max-height .4s ease}
+.db-table.expanded .db-columns{max-height:500px}
+.db-col{font-size:12px;padding:4px 0;color:var(--text-dim);font-family:monospace;display:flex;justify-content:space-between}
+.db-col-name{color:var(--text)}
+.db-col-type{color:var(--accent);font-size:11px}
+.db-badge{
+  display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;
+  margin-left:8px;vertical-align:middle;
+}
+.db-badge.pk{background:rgba(239,68,68,.2);color:var(--danger)}
+.db-badge.partition{background:rgba(245,158,11,.2);color:var(--warning)}
+.db-badge.fk{background:rgba(59,130,246,.2);color:var(--info)}
+
+/* ============================================================
+   VPS DIAGRAM
+   ============================================================ */
+.vps-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px}
+.vps-card{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:24px;transition:var(--transition);position:relative;overflow:hidden;
+}
+.vps-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:4px;
+}
+.vps-card.gw::before{background:linear-gradient(90deg,#6366f1,#8b5cf6)}
+.vps-card.core::before{background:linear-gradient(90deg,#10b981,#06b6d4)}
+.vps-card.worker::before{background:linear-gradient(90deg,#f59e0b,#ef4444)}
+.vps-card.db::before{background:linear-gradient(90deg,#3b82f6,#6366f1)}
+.vps-card.mon::before{background:linear-gradient(90deg,#ec4899,#8b5cf6)}
+.vps-card.stg::before{background:linear-gradient(90deg,#64748b,#94a3b8)}
+.vps-card:hover{border-color:var(--accent);transform:translateY(-3px);box-shadow:0 8px 25px var(--glow)}
+.vps-num{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:28px;height:28px;border-radius:50%;font-size:12px;font-weight:700;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;margin-bottom:12px;
+}
+.vps-name{font-size:16px;font-weight:700;color:var(--text-bright);margin-bottom:4px}
+.vps-role{font-size:13px;color:var(--accent3);margin-bottom:12px}
+.vps-services{list-style:none}
+.vps-services li{font-size:13px;color:var(--text-dim);padding:3px 0;padding-left:16px;position:relative}
+.vps-services li::before{content:'';position:absolute;left:0;top:50%;width:8px;height:8px;border-radius:50%;transform:translateY(-50%);background:var(--accent)}
+.vpn-note{
+  margin-top:32px;padding:20px;background:rgba(99,102,241,.08);
+  border:1px solid var(--border);border-radius:var(--radius);text-align:center;
+}
+.vpn-note .vpn-title{font-weight:700;color:var(--accent3);margin-bottom:8px}
+
+/* ============================================================
+   COMMISSION SECTION
+   ============================================================ */
+.commission-visual{
+  max-width:600px;margin:24px auto;padding:32px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+}
+.commission-bar{display:flex;height:40px;border-radius:8px;overflow:hidden;margin:16px 0}
+.commission-bar div{display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:#fff}
+.comm-system{background:linear-gradient(135deg,#6366f1,#8b5cf6);flex:4}
+.comm-agent{background:linear-gradient(135deg,#10b981,#06b6d4);flex:3}
+.comm-partner{background:linear-gradient(135deg,#f59e0b,#ef4444);flex:2}
+.commission-legend{display:flex;justify-content:center;gap:24px;margin-top:12px;flex-wrap:wrap}
+.legend-item{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-dim)}
+.legend-dot{width:12px;height:12px;border-radius:50%}
+
+/* ============================================================
+   QUICK LINKS
+   ============================================================ */
+.quick-links{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-top:32px}
+.quick-link{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:16px;cursor:pointer;transition:var(--transition);text-align:center;
+}
+.quick-link:hover{border-color:var(--accent);background:var(--bg-card-hover);transform:translateY(-2px)}
+.quick-link .ql-icon{font-size:24px;margin-bottom:6px}
+.quick-link .ql-label{font-size:14px;font-weight:600;color:var(--text-bright)}
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.footer{
+  text-align:center;padding:32px 0;border-top:1px solid var(--border);
+  margin-top:48px;color:var(--text-dim);font-size:13px;
+}
+.footer .update-time{color:var(--accent3)}
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media(max-width:768px){
+  .nav{gap:2px}
+  .nav-btn{padding:8px 12px;font-size:12px}
+  .stats-grid{grid-template-columns:repeat(2,1fr)}
+  .services-grid{grid-template-columns:1fr}
+  .db-grid{grid-template-columns:1fr}
+  .vps-grid{grid-template-columns:1fr}
+  .flow-steps{flex-direction:column}
+  .flow-arrow{transform:rotate(90deg)}
+  .header-inner{justify-content:center}
+  .section-title{font-size:22px}
+}
+
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:var(--bg-primary)}
+::-webkit-scrollbar-thumb{background:var(--bg-card-hover);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--accent)}
+
+/* ============================================================
+   PARTICLES (decorative)
+   ============================================================ */
+.particle{
+  position:fixed;width:4px;height:4px;border-radius:50%;
+  background:rgba(99,102,241,.3);pointer-events:none;z-index:0;
+  animation:float 15s infinite linear;
+}
+@keyframes float{
+  0%{transform:translateY(100vh) scale(0);opacity:0}
+  10%{opacity:1}
+  90%{opacity:1}
+  100%{transform:translateY(-100vh) scale(1);opacity:0}
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     FLOATING PARTICLES (decorative background animation)
+     ============================================================ -->
+<div id="particles"></div>
+
+<!-- ============================================================
+     MAIN APPLICATION WRAPPER
+     ============================================================ -->
+<div class="app">
+
+  <!-- ==========================================================
+       HEADER & NAVIGATION
+       ========================================================== -->
+  <header class="header">
+    <div class="container header-inner">
+      <div class="logo">
+        <span class="logo-icon">💳</span>
+        <div>
+          <h1>RichPayment</h1>
+          <div class="subtitle">Payment Gateway Dashboard</div>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-btn active" onclick="switchTab('overview')">📊 Overview</button>
+        <button class="nav-btn" onclick="switchTab('architecture')">🏗️ Architecture</button>
+        <button class="nav-btn" onclick="switchTab('services')">⚙️ Services</button>
+        <button class="nav-btn" onclick="switchTab('database')">🗄️ Database</button>
+        <button class="nav-btn" onclick="switchTab('security')">🛡️ Security</button>
+        <button class="nav-btn" onclick="switchTab('flows')">🔄 Flows</button>
+        <button class="nav-btn" onclick="switchTab('vps')">🖥️ VPS</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- ========================================================
+         TAB: OVERVIEW
+         ======================================================== -->
+    <div id="tab-overview" class="tab-content active">
+      <h2 class="section-title">Project Overview / ภาพรวมโปรเจค</h2>
+      <p class="section-subtitle">RichPayment - ระบบ Payment Gateway ประกอบด้วย 12 Microservices เขียนด้วย Go</p>
+
+      <!-- Stats cards -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon">📁</div>
+          <div class="stat-value">171+</div>
+          <div class="stat-label">Total Files / ไฟล์ทั้งหมด</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">📝</div>
+          <div class="stat-value">33K+</div>
+          <div class="stat-label">Lines of Code / บรรทัดโค้ด</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🔧</div>
+          <div class="stat-value">12</div>
+          <div class="stat-label">Microservices / เซอร์วิส</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🗃️</div>
+          <div class="stat-value">20</div>
+          <div class="stat-label">DB Tables / ตารางข้อมูล</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🐹</div>
+          <div class="stat-value">110+</div>
+          <div class="stat-label">Go Files / ไฟล์ Go</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🛡️</div>
+          <div class="stat-value">11</div>
+          <div class="stat-label">Security Layers / ชั้นความปลอดภัย</div>
+        </div>
+      </div>
+
+      <!-- Tech Stack -->
+      <h3 style="font-size:18px;font-weight:700;color:var(--text-bright);margin-bottom:16px">🛠️ Tech Stack</h3>
+      <div class="stats-grid" style="margin-bottom:40px">
+        <div class="stat-card" style="text-align:left;padding:20px">
+          <div style="font-size:14px;font-weight:600;color:var(--accent3);margin-bottom:8px">Backend</div>
+          <div style="font-size:13px;color:var(--text-dim)">Go 1.21+ / Chi Router / SQLX</div>
+        </div>
+        <div class="stat-card" style="text-align:left;padding:20px">
+          <div style="font-size:14px;font-weight:600;color:var(--accent3);margin-bottom:8px">Database</div>
+          <div style="font-size:13px;color:var(--text-dim)">PostgreSQL 15 / Redis 7 / NATS</div>
+        </div>
+        <div class="stat-card" style="text-align:left;padding:20px">
+          <div style="font-size:14px;font-weight:600;color:var(--accent3);margin-bottom:8px">Infrastructure</div>
+          <div style="font-size:13px;color:var(--text-dim)">Docker / Nginx / WireGuard VPN</div>
+        </div>
+        <div class="stat-card" style="text-align:left;padding:20px">
+          <div style="font-size:14px;font-weight:600;color:var(--accent3);margin-bottom:8px">Monitoring</div>
+          <div style="font-size:13px;color:var(--text-dim)">Prometheus / Grafana / Alerting</div>
+        </div>
+      </div>
+
+      <!-- Commission Visual -->
+      <h3 style="font-size:18px;font-weight:700;color:var(--text-bright);margin-bottom:16px">💰 Commission Structure / โครงสร้างค่าคอมมิชชัน</h3>
+      <div class="commission-visual">
+        <p style="font-size:13px;color:var(--text-dim);text-align:center;margin-bottom:8px">
+          Total Fee = amount x merchant_fee_pct
+        </p>
+        <div class="commission-bar">
+          <div class="comm-system">System</div>
+          <div class="comm-agent">Agent</div>
+          <div class="comm-partner">Partner</div>
+        </div>
+        <div class="commission-legend">
+          <div class="legend-item"><div class="legend-dot" style="background:#6366f1"></div>System = fee - agent - partner</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div>Agent = fee x agent_pct</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Partner = fee x partner_pct</div>
+        </div>
+      </div>
+
+      <!-- Quick links -->
+      <h3 style="font-size:18px;font-weight:700;color:var(--text-bright);margin-bottom:16px;margin-top:40px">🔗 Quick Navigation / เมนูลัด</h3>
+      <div class="quick-links">
+        <div class="quick-link" onclick="switchTab('architecture')"><div class="ql-icon">🏗️</div><div class="ql-label">Architecture</div></div>
+        <div class="quick-link" onclick="switchTab('services')"><div class="ql-icon">⚙️</div><div class="ql-label">12 Services</div></div>
+        <div class="quick-link" onclick="switchTab('database')"><div class="ql-icon">🗄️</div><div class="ql-label">20 Tables</div></div>
+        <div class="quick-link" onclick="switchTab('security')"><div class="ql-icon">🛡️</div><div class="ql-label">11 Security Layers</div></div>
+        <div class="quick-link" onclick="switchTab('flows')"><div class="ql-icon">🔄</div><div class="ql-label">Payment Flows</div></div>
+        <div class="quick-link" onclick="switchTab('vps')"><div class="ql-icon">🖥️</div><div class="ql-label">7+1 VPS</div></div>
+      </div>
+    </div>
+
+    <!-- ========================================================
+         TAB: ARCHITECTURE
+         ======================================================== -->
+    <div id="tab-architecture" class="tab-content">
+      <h2 class="section-title">System Architecture / สถาปัตยกรรมระบบ</h2>
+      <p class="section-subtitle">Click on any service to view details / คลิกที่เซอร์วิสเพื่อดูรายละเอียด</p>
+
+      <div class="arch-container">
+        <svg class="arch-svg" viewBox="0 0 960 620" xmlns="http://www.w3.org/2000/svg">
+          <!-- Connection lines (drawn first, behind boxes) -->
+          <!-- Gateway connects to all core services -->
+          <line class="conn-line animated" x1="160" y1="120" x2="160" y2="230"/>
+          <line class="conn-line animated" x1="160" y1="120" x2="340" y2="230"/>
+          <line class="conn-line animated" x1="160" y1="120" x2="520" y2="230"/>
+          <line class="conn-line animated" x1="160" y1="120" x2="700" y2="230"/>
+          <!-- Auth connections -->
+          <line class="conn-line" x1="160" y1="290" x2="340" y2="290"/>
+          <!-- Order -> Wallet -->
+          <line class="conn-line animated" x1="520" y1="290" x2="700" y2="290"/>
+          <!-- Order -> Bank -->
+          <line class="conn-line animated" x1="520" y1="290" x2="340" y2="430"/>
+          <!-- Order -> Commission -->
+          <line class="conn-line" x1="520" y1="290" x2="520" y2="410"/>
+          <!-- Wallet -> Commission -->
+          <line class="conn-line" x1="700" y1="290" x2="520" y2="410"/>
+          <!-- Parser -> Order -->
+          <line class="conn-line animated" x1="160" y1="430" x2="520" y2="290"/>
+          <!-- Notification connections -->
+          <line class="conn-line" x1="700" y1="430" x2="700" y2="290"/>
+          <!-- Telegram -> Order -->
+          <line class="conn-line animated" x1="840" y1="430" x2="520" y2="290"/>
+          <!-- Scheduler connections -->
+          <line class="conn-line" x1="840" y1="290" x2="700" y2="290"/>
+          <!-- Withdrawal -> Wallet -->
+          <line class="conn-line animated" x1="840" y1="230" x2="700" y2="260"/>
+          <!-- Gateway -> Withdrawal -->
+          <line class="conn-line animated" x1="160" y1="120" x2="840" y2="260"/>
+
+          <!-- TIER LABELS -->
+          <text x="30" y="105" fill="#6366f1" font-size="11" font-weight="600" opacity=".6">ENTRY</text>
+          <text x="30" y="260" fill="#10b981" font-size="11" font-weight="600" opacity=".6">CORE</text>
+          <text x="30" y="430" fill="#f59e0b" font-size="11" font-weight="600" opacity=".6">WORKER</text>
+          <text x="30" y="560" fill="#3b82f6" font-size="11" font-weight="600" opacity=".6">DATA</text>
+
+          <!-- Horizontal tier dividers -->
+          <line x1="20" y1="170" x2="940" y2="170" stroke="rgba(99,102,241,.1)" stroke-dasharray="4 4"/>
+          <line x1="20" y1="360" x2="940" y2="360" stroke="rgba(99,102,241,.1)" stroke-dasharray="4 4"/>
+          <line x1="20" y1="510" x2="940" y2="510" stroke="rgba(99,102,241,.1)" stroke-dasharray="4 4"/>
+
+          <!-- SERVICE BOXES -->
+          <!-- Gateway -->
+          <g class="svc-box" onclick="showArchDetail('gateway')">
+            <rect x="90" y="80" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(99,102,241,.4)"/>
+            <text x="160" y="102" text-anchor="middle">🌐 Gateway</text>
+            <text x="160" y="120" text-anchor="middle" class="port-text">:8080</text>
+          </g>
+
+          <!-- Auth -->
+          <g class="svc-box" onclick="showArchDetail('auth')">
+            <rect x="90" y="230" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(99,102,241,.4)"/>
+            <text x="160" y="252" text-anchor="middle">🔐 Auth</text>
+            <text x="160" y="270" text-anchor="middle" class="port-text">:8081</text>
+          </g>
+
+          <!-- User -->
+          <g class="svc-box" onclick="showArchDetail('user')">
+            <rect x="270" y="230" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(99,102,241,.4)"/>
+            <text x="340" y="252" text-anchor="middle">👤 User</text>
+            <text x="340" y="270" text-anchor="middle" class="port-text">:8082</text>
+          </g>
+
+          <!-- Order -->
+          <g class="svc-box" onclick="showArchDetail('order')">
+            <rect x="450" y="230" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(99,102,241,.4)"/>
+            <text x="520" y="252" text-anchor="middle">📋 Order</text>
+            <text x="520" y="270" text-anchor="middle" class="port-text">:8083</text>
+          </g>
+
+          <!-- Wallet -->
+          <g class="svc-box" onclick="showArchDetail('wallet')">
+            <rect x="630" y="230" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(99,102,241,.4)"/>
+            <text x="700" y="252" text-anchor="middle">💰 Wallet</text>
+            <text x="700" y="270" text-anchor="middle" class="port-text">:8084</text>
+          </g>
+
+          <!-- Withdrawal -->
+          <g class="svc-box" onclick="showArchDetail('withdrawal')">
+            <rect x="770" y="230" width="150" height="50" rx="8" fill="#161b4a" stroke="rgba(99,102,241,.4)"/>
+            <text x="845" y="252" text-anchor="middle">🏧 Withdrawal</text>
+            <text x="845" y="270" text-anchor="middle" class="port-text">:8085</text>
+          </g>
+
+          <!-- Parser -->
+          <g class="svc-box" onclick="showArchDetail('parser')">
+            <rect x="90" y="400" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(245,158,11,.4)"/>
+            <text x="160" y="422" text-anchor="middle">📱 Parser</text>
+            <text x="160" y="440" text-anchor="middle" class="port-text">:8086</text>
+          </g>
+
+          <!-- Bank -->
+          <g class="svc-box" onclick="showArchDetail('bank')">
+            <rect x="270" y="400" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(245,158,11,.4)"/>
+            <text x="340" y="422" text-anchor="middle">🏦 Bank</text>
+            <text x="340" y="440" text-anchor="middle" class="port-text">:8089</text>
+          </g>
+
+          <!-- Commission -->
+          <g class="svc-box" onclick="showArchDetail('commission')">
+            <rect x="450" y="400" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(245,158,11,.4)"/>
+            <text x="520" y="422" text-anchor="middle">💸 Commission</text>
+            <text x="520" y="440" text-anchor="middle" class="port-text">:8088</text>
+          </g>
+
+          <!-- Notification -->
+          <g class="svc-box" onclick="showArchDetail('notification')">
+            <rect x="630" y="400" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(245,158,11,.4)"/>
+            <text x="700" y="422" text-anchor="middle">🔔 Notification</text>
+            <text x="700" y="440" text-anchor="middle" class="port-text">:8087</text>
+          </g>
+
+          <!-- Telegram -->
+          <g class="svc-box" onclick="showArchDetail('telegram')">
+            <rect x="770" y="400" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(245,158,11,.4)"/>
+            <text x="840" y="422" text-anchor="middle">✈️ Telegram</text>
+            <text x="840" y="440" text-anchor="middle" class="port-text">:8090</text>
+          </g>
+
+          <!-- Scheduler -->
+          <g class="svc-box" onclick="showArchDetail('scheduler')">
+            <rect x="770" y="310" width="140" height="40" rx="8" fill="#161b4a" stroke="rgba(245,158,11,.4)"/>
+            <text x="840" y="334" text-anchor="middle">⏰ Scheduler :8091</text>
+          </g>
+
+          <!-- DATA TIER -->
+          <g>
+            <rect x="200" y="530" width="160" height="50" rx="8" fill="#161b4a" stroke="rgba(59,130,246,.4)"/>
+            <text x="280" y="555" text-anchor="middle" fill="#3b82f6" font-size="13" font-weight="600">🐘 PostgreSQL</text>
+            <text x="280" y="572" text-anchor="middle" fill="#64748b" font-size="10">20 tables, partitioned</text>
+          </g>
+          <g>
+            <rect x="420" y="530" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(239,68,68,.4)"/>
+            <text x="490" y="555" text-anchor="middle" fill="#ef4444" font-size="13" font-weight="600">⚡ Redis</text>
+            <text x="490" y="572" text-anchor="middle" fill="#64748b" font-size="10">Cache, locks, sessions</text>
+          </g>
+          <g>
+            <rect x="620" y="530" width="140" height="50" rx="8" fill="#161b4a" stroke="rgba(16,185,129,.4)"/>
+            <text x="690" y="555" text-anchor="middle" fill="#10b981" font-size="13" font-weight="600">📨 NATS</text>
+            <text x="690" y="572" text-anchor="middle" fill="#64748b" font-size="10">Event streaming</text>
+          </g>
+
+          <!-- Data tier connections -->
+          <line class="conn-line" x1="280" y1="530" x2="280" y2="460" stroke="rgba(59,130,246,.2)"/>
+          <line class="conn-line" x1="490" y1="530" x2="490" y2="460" stroke="rgba(239,68,68,.2)"/>
+          <line class="conn-line" x1="690" y1="530" x2="690" y2="460" stroke="rgba(16,185,129,.2)"/>
+        </svg>
+      </div>
+
+      <!-- Detail overlay panel -->
+      <div class="arch-overlay" id="archOverlay" onclick="hideArchDetail()"></div>
+      <div class="arch-detail-panel" id="archPanel">
+        <button class="panel-close" onclick="hideArchDetail()">&times;</button>
+        <div id="archPanelContent"></div>
+      </div>
+    </div>
+
+    <!-- ========================================================
+         TAB: SERVICES
+         ======================================================== -->
+    <div id="tab-services" class="tab-content">
+      <h2 class="section-title">Microservices / ไมโครเซอร์วิส</h2>
+      <p class="section-subtitle">12 services ที่ทำงานร่วมกัน - คลิกเพื่อดูรายละเอียด</p>
+      <div class="services-grid" id="servicesGrid"></div>
+    </div>
+
+    <!-- ========================================================
+         TAB: DATABASE
+         ======================================================== -->
+    <div id="tab-database" class="tab-content">
+      <h2 class="section-title">Database Schema / โครงสร้างฐานข้อมูล</h2>
+      <p class="section-subtitle">PostgreSQL 15 - 20 tables with range partitioning / คลิกตารางเพื่อดูคอลัมน์</p>
+      <div class="db-grid" id="dbGrid"></div>
+    </div>
+
+    <!-- ========================================================
+         TAB: SECURITY
+         ======================================================== -->
+    <div id="tab-security" class="tab-content">
+      <h2 class="section-title">Security Layers / ชั้นความปลอดภัย</h2>
+      <p class="section-subtitle">11 layers of defense-in-depth / 11 ชั้นการป้องกัน - คลิกเพื่อดูรายละเอียด</p>
+      <div class="security-stack" id="securityStack"></div>
+    </div>
+
+    <!-- ========================================================
+         TAB: FLOWS
+         ======================================================== -->
+    <div id="tab-flows" class="tab-content">
+      <h2 class="section-title">Payment Flows / ขั้นตอนการชำระเงิน</h2>
+      <p class="section-subtitle">กดปุ่ม Play เพื่อดูขั้นตอนการทำงานแบบ Animation</p>
+
+      <!-- Deposit Flow -->
+      <div class="flow-section" id="depositFlow">
+        <div class="flow-title">💰 Deposit Flow / ขั้นตอนฝากเงิน</div>
+        <div class="flow-steps" id="depositSteps"></div>
+        <div class="flow-controls">
+          <button class="flow-btn" onclick="playFlow('deposit')">▶️ Play Animation</button>
+          <button class="flow-btn secondary" onclick="resetFlow('deposit')">⏹️ Reset</button>
+        </div>
+      </div>
+
+      <!-- Withdrawal Flow -->
+      <div class="flow-section" id="withdrawalFlow">
+        <div class="flow-title">🏧 Withdrawal Flow / ขั้นตอนถอนเงิน</div>
+        <div class="flow-steps" id="withdrawalSteps"></div>
+        <div class="flow-controls">
+          <button class="flow-btn" onclick="playFlow('withdrawal')">▶️ Play Animation</button>
+          <button class="flow-btn secondary" onclick="resetFlow('withdrawal')">⏹️ Reset</button>
+        </div>
+      </div>
+
+      <!-- Slip Flow -->
+      <div class="flow-section" id="slipFlow">
+        <div class="flow-title">📸 Slip Verification Flow / ขั้นตอนตรวจสอบสลิป</div>
+        <div class="flow-steps" id="slipSteps"></div>
+        <div class="flow-controls">
+          <button class="flow-btn" onclick="playFlow('slip')">▶️ Play Animation</button>
+          <button class="flow-btn secondary" onclick="resetFlow('slip')">⏹️ Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========================================================
+         TAB: VPS
+         ======================================================== -->
+    <div id="tab-vps" class="tab-content">
+      <h2 class="section-title">VPS Architecture / สถาปัตยกรรมเซิร์ฟเวอร์</h2>
+      <p class="section-subtitle">Plan C: 7+1 VPS with WireGuard VPN mesh / แผนผัง 8 เซิร์ฟเวอร์</p>
+      <div class="vps-grid" id="vpsGrid"></div>
+      <div class="vpn-note">
+        <div class="vpn-title">🔒 WireGuard VPN Mesh Network</div>
+        <p style="font-size:13px;color:var(--text-dim)">
+          ทุก VPS เชื่อมต่อกันผ่าน WireGuard VPN (10.10.0.0/24)<br>
+          Internal services communicate via private IPs only / เซอร์วิสภายในสื่อสารผ่าน IP ส่วนตัวเท่านั้น
+        </p>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ==========================================================
+       FOOTER
+       ========================================================== -->
+  <footer class="footer">
+    <p>RichPayment Project Dashboard | 12 Microservices | Go + PostgreSQL + Redis + NATS</p>
+    <p>Last updated / อัปเดตล่าสุด: <span class="update-time" id="updateTime"></span></p>
+  </footer>
+
+</div>
+
+<script>
+/* ==============================================================
+   DATA DEFINITIONS
+   All service, database, security, flow, and VPS data
+   ============================================================== */
+
+// ---- Services data (12 services) ----
+const services = [
+  {
+    id:'gateway', name:'Gateway', emoji:'🌐', port:8080,
+    desc:'API Gateway - จุดเข้าหลักของระบบ รับ request จาก merchant และกระจายไปยัง service ต่างๆ',
+    tags:['Entry Point','Routing','Rate Limit','HMAC Verify'],
+    endpoints:['/api/v1/deposit','/api/v1/withdraw','/api/v1/status','/api/v1/balance','/health'],
+    files:['cmd/gateway/main.go','internal/gateway/handler.go','internal/gateway/router.go','internal/gateway/middleware.go'],
+    connections:['auth','order','wallet','withdrawal','user']
+  },
+  {
+    id:'auth', name:'Auth', emoji:'🔐', port:8081,
+    desc:'Authentication Service - จัดการ JWT tokens, 2FA (TOTP), RBAC roles, sessions',
+    tags:['JWT','2FA/TOTP','RBAC','Sessions','IP Binding'],
+    endpoints:['/api/v1/login','/api/v1/logout','/api/v1/refresh','/api/v1/2fa/setup','/api/v1/2fa/verify'],
+    files:['cmd/auth/main.go','internal/auth/handler.go','internal/auth/jwt.go','internal/auth/totp.go','internal/auth/rbac.go'],
+    connections:['user','gateway']
+  },
+  {
+    id:'user', name:'User', emoji:'👤', port:8082,
+    desc:'User Management - CRUD สำหรับ admin, merchant, agent, partner พร้อม hierarchy',
+    tags:['CRUD','Merchant','Agent','Partner','Admin'],
+    endpoints:['/api/v1/users','/api/v1/users/:id','/api/v1/merchants','/api/v1/agents'],
+    files:['cmd/user/main.go','internal/user/handler.go','internal/user/service.go','internal/user/repository.go'],
+    connections:['auth']
+  },
+  {
+    id:'order', name:'Order', emoji:'📋', port:8083,
+    desc:'Order Management - จัดการ deposit orders, สร้าง QR code, matching transactions',
+    tags:['Deposit','QR Code','Matching','Status Tracking'],
+    endpoints:['/api/v1/orders','/api/v1/orders/:id','/api/v1/orders/match','/api/v1/orders/qr'],
+    files:['cmd/order/main.go','internal/order/handler.go','internal/order/service.go','internal/order/matcher.go'],
+    connections:['wallet','bank','commission','notification','gateway']
+  },
+  {
+    id:'wallet', name:'Wallet', emoji:'💰', port:8084,
+    desc:'Wallet & Ledger - จัดการยอดเงิน, บันทึกรายการ, atomic locks ป้องกัน race condition',
+    tags:['Balance','Ledger','Atomic Lock','FOR UPDATE','Redis Lock'],
+    endpoints:['/api/v1/wallets/:id/balance','/api/v1/wallets/:id/credit','/api/v1/wallets/:id/debit','/api/v1/wallets/:id/hold'],
+    files:['cmd/wallet/main.go','internal/wallet/handler.go','internal/wallet/service.go','internal/wallet/ledger.go'],
+    connections:['order','withdrawal','commission']
+  },
+  {
+    id:'withdrawal', name:'Withdrawal', emoji:'🏧', port:8085,
+    desc:'Withdrawal Processing - คำขอถอนเงิน, approval flow, admin review',
+    tags:['Withdrawal','Approval','Admin Review','Hold/Release'],
+    endpoints:['/api/v1/withdrawals','/api/v1/withdrawals/:id/approve','/api/v1/withdrawals/:id/reject'],
+    files:['cmd/withdrawal/main.go','internal/withdrawal/handler.go','internal/withdrawal/service.go'],
+    connections:['wallet','commission','notification','gateway']
+  },
+  {
+    id:'parser', name:'Parser', emoji:'📱', port:8086,
+    desc:'SMS Parser - แยกวิเคราะห์ SMS จากธนาคาร, anti-spoofing, confidence scoring, anomaly detection',
+    tags:['SMS Parse','Anti-Spoofing','Confidence Score','Anomaly Detection'],
+    endpoints:['/api/v1/sms/parse','/api/v1/sms/validate'],
+    files:['cmd/parser/main.go','internal/parser/handler.go','internal/parser/parser.go','internal/parser/antispoofing.go','internal/parser/anomaly.go'],
+    connections:['order']
+  },
+  {
+    id:'notification', name:'Notification', emoji:'🔔', port:8087,
+    desc:'Notification Service - ส่ง webhook callbacks, Telegram alerts, retry with exponential backoff',
+    tags:['Webhook','Telegram','Retry','Exponential Backoff'],
+    endpoints:['/api/v1/webhooks/send','/api/v1/alerts/send'],
+    files:['cmd/notification/main.go','internal/notification/handler.go','internal/notification/webhook.go','internal/notification/telegram.go'],
+    connections:['order','withdrawal']
+  },
+  {
+    id:'commission', name:'Commission', emoji:'💸', port:8088,
+    desc:'Commission Calculator - คำนวณค่าธรรมเนียม, แบ่ง 3 ทาง (system/agent/partner)',
+    tags:['Fee Calc','3-Way Split','Agent Share','Partner Share'],
+    endpoints:['/api/v1/commission/calculate','/api/v1/commission/report'],
+    files:['cmd/commission/main.go','internal/commission/handler.go','internal/commission/calculator.go'],
+    connections:['order','wallet','withdrawal']
+  },
+  {
+    id:'bank', name:'Bank', emoji:'🏦', port:8089,
+    desc:'Bank Account Pool - จัดการบัญชีธนาคาร, auto-switch เมื่อถึงลิมิต, bank transfers',
+    tags:['Account Pool','Auto Switch','Daily Limit','Transfer'],
+    endpoints:['/api/v1/banks/available','/api/v1/banks/:id/select','/api/v1/banks/transfer'],
+    files:['cmd/bank/main.go','internal/bank/handler.go','internal/bank/pool.go','internal/bank/selector.go'],
+    connections:['order']
+  },
+  {
+    id:'telegram', name:'Telegram', emoji:'✈️', port:8090,
+    desc:'Telegram Bot - รับสลิปจากกลุ่ม Telegram, ตรวจสอบผ่าน EasySlip API, match order',
+    tags:['Telegram Bot','Slip Verify','EasySlip API','Group Chat'],
+    endpoints:['/api/v1/telegram/webhook','/api/v1/telegram/verify'],
+    files:['cmd/telegram/main.go','internal/telegram/handler.go','internal/telegram/bot.go','internal/telegram/easyslip.go'],
+    connections:['order']
+  },
+  {
+    id:'scheduler', name:'Scheduler', emoji:'⏰', port:8091,
+    desc:'Scheduler - Cron jobs, partition management, data archival, expired order cleanup',
+    tags:['Cron','Partition','Archival','Cleanup','Health Check'],
+    endpoints:['/api/v1/scheduler/status','/api/v1/scheduler/trigger'],
+    files:['cmd/scheduler/main.go','internal/scheduler/handler.go','internal/scheduler/jobs.go','internal/scheduler/partition.go'],
+    connections:['order','wallet']
+  }
+];
+
+// ---- Architecture detail data for the SVG panel ----
+const archDetails = {};
+services.forEach(s => {
+  archDetails[s.id] = s;
+});
+
+// ---- Database tables (20 tables) ----
+const tables = [
+  {name:'users',desc:'ผู้ใช้ระบบ (admin, merchant, agent, partner)',partitioned:false,
+   cols:[{n:'id',t:'UUID PK'},{n:'username',t:'VARCHAR(100)'},{n:'email',t:'VARCHAR(255)'},{n:'password_hash',t:'TEXT'},{n:'role',t:'user_role'},{n:'status',t:'user_status'},{n:'parent_id',t:'UUID FK'},{n:'created_at',t:'TIMESTAMPTZ'},{n:'updated_at',t:'TIMESTAMPTZ'}]},
+  {name:'user_profiles',desc:'ข้อมูลเพิ่มเติมของผู้ใช้',partitioned:false,
+   cols:[{n:'user_id',t:'UUID FK'},{n:'full_name',t:'VARCHAR(200)'},{n:'phone',t:'VARCHAR(20)'},{n:'company_name',t:'VARCHAR(200)'},{n:'api_key',t:'VARCHAR(64)'},{n:'webhook_url',t:'TEXT'},{n:'ip_whitelist',t:'TEXT[]'}]},
+  {name:'sessions',desc:'Sessions ของผู้ใช้',partitioned:false,
+   cols:[{n:'id',t:'UUID PK'},{n:'user_id',t:'UUID FK'},{n:'token_hash',t:'TEXT'},{n:'ip_address',t:'INET'},{n:'fingerprint',t:'VARCHAR(64)'},{n:'expires_at',t:'TIMESTAMPTZ'},{n:'created_at',t:'TIMESTAMPTZ'}]},
+  {name:'api_keys',desc:'API Keys สำหรับ merchant',partitioned:false,
+   cols:[{n:'id',t:'UUID PK'},{n:'user_id',t:'UUID FK'},{n:'key_hash',t:'TEXT'},{n:'secret_hash',t:'TEXT'},{n:'name',t:'VARCHAR(100)'},{n:'permissions',t:'TEXT[]'},{n:'is_active',t:'BOOLEAN'},{n:'expires_at',t:'TIMESTAMPTZ'}]},
+  {name:'deposit_orders',desc:'คำสั่งฝากเงิน (partitioned by created_at)',partitioned:true,
+   cols:[{n:'id',t:'UUID PK'},{n:'merchant_id',t:'UUID FK'},{n:'order_ref',t:'VARCHAR(64)'},{n:'amount',t:'DECIMAL(15,2)'},{n:'currency',t:'CHAR(3)'},{n:'status',t:'order_status'},{n:'bank_account_id',t:'UUID FK'},{n:'matched_at',t:'TIMESTAMPTZ'},{n:'expired_at',t:'TIMESTAMPTZ'},{n:'created_at',t:'TIMESTAMPTZ'},{n:'updated_at',t:'TIMESTAMPTZ'}]},
+  {name:'withdrawal_orders',desc:'คำสั่งถอนเงิน (partitioned by created_at)',partitioned:true,
+   cols:[{n:'id',t:'UUID PK'},{n:'merchant_id',t:'UUID FK'},{n:'amount',t:'DECIMAL(15,2)'},{n:'destination_bank',t:'VARCHAR(50)'},{n:'destination_account',t:'VARCHAR(20)'},{n:'status',t:'withdrawal_status'},{n:'approved_by',t:'UUID FK'},{n:'created_at',t:'TIMESTAMPTZ'}]},
+  {name:'wallets',desc:'กระเป๋าเงินของ merchant/agent/partner',partitioned:false,
+   cols:[{n:'id',t:'UUID PK'},{n:'user_id',t:'UUID FK'},{n:'currency',t:'CHAR(3)'},{n:'balance',t:'DECIMAL(15,2)'},{n:'hold_balance',t:'DECIMAL(15,2)'},{n:'version',t:'INTEGER'},{n:'updated_at',t:'TIMESTAMPTZ'}]},
+  {name:'wallet_transactions',desc:'รายการเคลื่อนไหวกระเป๋าเงิน (partitioned)',partitioned:true,
+   cols:[{n:'id',t:'UUID PK'},{n:'wallet_id',t:'UUID FK'},{n:'type',t:'tx_type'},{n:'amount',t:'DECIMAL(15,2)'},{n:'balance_before',t:'DECIMAL(15,2)'},{n:'balance_after',t:'DECIMAL(15,2)'},{n:'reference_id',t:'UUID'},{n:'description',t:'TEXT'},{n:'created_at',t:'TIMESTAMPTZ'}]},
+  {name:'bank_accounts',desc:'บัญชีธนาคารในระบบ',partitioned:false,
+   cols:[{n:'id',t:'UUID PK'},{n:'bank_code',t:'VARCHAR(10)'},{n:'account_number',t:'VARCHAR(20)'},{n:'account_name',t:'VARCHAR(200)'},{n:'is_active',t:'BOOLEAN'},{n:'daily_limit',t:'DECIMAL(15,2)'},{n:'daily_used',t:'DECIMAL(15,2)'},{n:'priority',t:'INTEGER'}]},
+  {name:'bank_transfers',desc:'รายการโอนเงินธนาคาร',partitioned:true,
+   cols:[{n:'id',t:'UUID PK'},{n:'bank_account_id',t:'UUID FK'},{n:'amount',t:'DECIMAL(15,2)'},{n:'sender_name',t:'VARCHAR(200)'},{n:'reference',t:'VARCHAR(100)'},{n:'status',t:'transfer_status'},{n:'created_at',t:'TIMESTAMPTZ'}]},
+  {name:'sms_messages',desc:'SMS ที่รับจากธนาคาร',partitioned:true,
+   cols:[{n:'id',t:'UUID PK'},{n:'sender',t:'VARCHAR(50)'},{n:'body',t:'TEXT'},{n:'parsed_amount',t:'DECIMAL(15,2)'},{n:'parsed_bank',t:'VARCHAR(10)'},{n:'confidence_score',t:'DECIMAL(3,2)'},{n:'is_spoofed',t:'BOOLEAN'},{n:'matched_order_id',t:'UUID FK'},{n:'created_at',t:'TIMESTAMPTZ'}]},
+  {name:'commissions',desc:'รายการค่าคอมมิชชัน',partitioned:true,
+   cols:[{n:'id',t:'UUID PK'},{n:'order_id',t:'UUID FK'},{n:'order_type',t:'VARCHAR(20)'},{n:'total_fee',t:'DECIMAL(15,2)'},{n:'system_share',t:'DECIMAL(15,2)'},{n:'agent_share',t:'DECIMAL(15,2)'},{n:'partner_share',t:'DECIMAL(15,2)'},{n:'created_at',t:'TIMESTAMPTZ'}]},
+  {name:'commission_rates',desc:'อัตราค่าคอมมิชชัน',partitioned:false,
+   cols:[{n:'id',t:'UUID PK'},{n:'merchant_id',t:'UUID FK'},{n:'merchant_fee_pct',t:'DECIMAL(5,4)'},{n:'agent_commission_pct',t:'DECIMAL(5,4)'},{n:'partner_commission_pct',t:'DECIMAL(5,4)'},{n:'effective_from',t:'DATE'},{n:'effective_to',t:'DATE'}]},
+  {name:'webhook_deliveries',desc:'ประวัติการส่ง webhook',partitioned:true,
+   cols:[{n:'id',t:'UUID PK'},{n:'merchant_id',t:'UUID FK'},{n:'url',t:'TEXT'},{n:'payload',t:'JSONB'},{n:'status_code',t:'INTEGER'},{n:'attempts',t:'INTEGER'},{n:'next_retry_at',t:'TIMESTAMPTZ'},{n:'created_at',t:'TIMESTAMPTZ'}]},
+  {name:'telegram_messages',desc:'ข้อความจาก Telegram bot',partitioned:true,
+   cols:[{n:'id',t:'UUID PK'},{n:'chat_id',t:'BIGINT'},{n:'message_id',t:'BIGINT'},{n:'type',t:'VARCHAR(20)'},{n:'content',t:'TEXT'},{n:'slip_data',t:'JSONB'},{n:'matched_order_id',t:'UUID FK'},{n:'created_at',t:'TIMESTAMPTZ'}]},
+  {name:'audit_logs',desc:'Log การเปลี่ยนแปลงสำคัญ (partitioned)',partitioned:true,
+   cols:[{n:'id',t:'UUID PK'},{n:'user_id',t:'UUID FK'},{n:'action',t:'VARCHAR(50)'},{n:'resource_type',t:'VARCHAR(50)'},{n:'resource_id',t:'UUID'},{n:'old_value',t:'JSONB'},{n:'new_value',t:'JSONB'},{n:'ip_address',t:'INET'},{n:'created_at',t:'TIMESTAMPTZ'}]},
+  {name:'system_configs',desc:'การตั้งค่าระบบ',partitioned:false,
+   cols:[{n:'key',t:'VARCHAR(100) PK'},{n:'value',t:'JSONB'},{n:'description',t:'TEXT'},{n:'updated_by',t:'UUID FK'},{n:'updated_at',t:'TIMESTAMPTZ'}]},
+  {name:'rate_limits',desc:'ข้อมูล rate limiting',partitioned:false,
+   cols:[{n:'id',t:'UUID PK'},{n:'identifier',t:'VARCHAR(200)'},{n:'window_start',t:'TIMESTAMPTZ'},{n:'request_count',t:'INTEGER'},{n:'limit_value',t:'INTEGER'}]},
+  {name:'emergency_freezes',desc:'Emergency freeze records',partitioned:false,
+   cols:[{n:'id',t:'UUID PK'},{n:'freeze_type',t:'VARCHAR(50)'},{n:'target_id',t:'UUID'},{n:'reason',t:'TEXT'},{n:'frozen_by',t:'UUID FK'},{n:'frozen_at',t:'TIMESTAMPTZ'},{n:'unfrozen_at',t:'TIMESTAMPTZ'}]},
+  {name:'scheduled_jobs',desc:'Scheduled job tracking',partitioned:false,
+   cols:[{n:'id',t:'UUID PK'},{n:'job_name',t:'VARCHAR(100)'},{n:'schedule',t:'VARCHAR(50)'},{n:'last_run_at',t:'TIMESTAMPTZ'},{n:'next_run_at',t:'TIMESTAMPTZ'},{n:'status',t:'job_status'},{n:'result',t:'JSONB'}]}
+];
+
+// ---- Security layers (11 layers) ----
+const securityLayers = [
+  {num:1,name:'Nginx SSL/TLS Termination',icon:'🔒',
+   detail:'Nginx ทำหน้าที่ terminate SSL/TLS connections ด้วย Let\'s Encrypt certificates. ใช้ TLS 1.3 เป็นหลัก, HSTS headers, และ OCSP stapling เพื่อความปลอดภัยสูงสุด'},
+  {num:2,name:'Rate Limiting (100 req/min)',icon:'⏱️',
+   detail:'จำกัดจำนวน request ที่ 100 ครั้ง/นาที ต่อ API key. ใช้ sliding window algorithm ผ่าน Redis เพื่อป้องกัน DDoS และ brute force attacks'},
+  {num:3,name:'API Key + HMAC Signature',icon:'🔑',
+   detail:'ทุก request ต้องมี API Key ใน header และ HMAC-SHA256 signature ที่สร้างจาก request body + timestamp + secret key เพื่อป้องกัน tampering'},
+  {num:4,name:'IP Whitelist',icon:'📋',
+   detail:'Merchant สามารถกำหนด IP whitelist ได้. ระบบจะตรวจสอบ source IP กับรายการ IP ที่อนุญาตก่อนประมวลผล request'},
+  {num:5,name:'Emergency Freeze',icon:'🚨',
+   detail:'ระบบ freeze ฉุกเฉิน สามารถหยุดการทำงานทั้งระบบหรือเฉพาะ merchant ได้ทันที เมื่อตรวจพบพฤติกรรมผิดปกติ'},
+  {num:6,name:'Internal Service Auth (HMAC)',icon:'🔗',
+   detail:'การสื่อสารระหว่าง services ใช้ HMAC signature ภายใน. ทุก service ตรวจสอบ signature ก่อนประมวลผล request จาก service อื่น'},
+  {num:7,name:'Service ACL (Access Control List)',icon:'📜',
+   detail:'แต่ละ service มี ACL กำหนดว่า service ไหนสามารถเรียกใช้ endpoint ไหนได้. ป้องกัน unauthorized cross-service calls'},
+  {num:8,name:'SMS Anti-Spoofing',icon:'📱',
+   detail:'Parser service ใช้ confidence scoring algorithm ตรวจสอบ SMS. วิเคราะห์ sender, format, timing, amount pattern เพื่อให้คะแนนความน่าเชื่อถือ'},
+  {num:9,name:'Wallet Atomic Locks',icon:'🔐',
+   detail:'ใช้ PostgreSQL SELECT FOR UPDATE + Redis distributed lock เพื่อป้องกัน race condition ในการอัปเดตยอดเงิน. Double-entry bookkeeping ทุกรายการ'},
+  {num:10,name:'Session Security',icon:'🪪',
+   detail:'Session ผูกกับ IP address + browser fingerprint. ถ้า IP เปลี่ยนหรือ fingerprint ไม่ตรง session จะถูก invalidate ทันที'},
+  {num:11,name:'Log Sanitization',icon:'📝',
+   detail:'ข้อมูลสำคัญ (passwords, tokens, account numbers) ถูก mask ก่อนเขียน log. ป้องกันข้อมูลรั่วไหลผ่าน log files'}
+];
+
+// ---- Flow definitions ----
+const flows = {
+  deposit: [
+    {emoji:'🏪',label:'Merchant API'},
+    {emoji:'🌐',label:'Gateway'},
+    {emoji:'📋',label:'Order สร้างคำสั่ง'},
+    {emoji:'🏦',label:'Bank เลือกบัญชี'},
+    {emoji:'📱',label:'QR Code'},
+    {emoji:'💳',label:'Customer ชำระ'},
+    {emoji:'📩',label:'SMS จากธนาคาร'},
+    {emoji:'🔍',label:'Parser แยกข้อมูล'},
+    {emoji:'✅',label:'Match ตรวจสอบ'},
+    {emoji:'💰',label:'Wallet เครดิต'},
+    {emoji:'💸',label:'Commission แบ่ง'},
+    {emoji:'🔔',label:'Webhook แจ้งผล'}
+  ],
+  withdrawal: [
+    {emoji:'🏪',label:'Merchant API'},
+    {emoji:'🌐',label:'Gateway'},
+    {emoji:'🏧',label:'Withdrawal สร้าง'},
+    {emoji:'💰',label:'Wallet Hold'},
+    {emoji:'👨‍💼',label:'Admin อนุมัติ'},
+    {emoji:'✅',label:'Complete'},
+    {emoji:'💰',label:'Wallet Debit'},
+    {emoji:'💸',label:'Commission'},
+    {emoji:'🔔',label:'Webhook แจ้งผล'}
+  ],
+  slip: [
+    {emoji:'📸',label:'ลูกค้าส่งสลิป'},
+    {emoji:'✈️',label:'Telegram Group'},
+    {emoji:'🤖',label:'Telegram Bot'},
+    {emoji:'🔍',label:'EasySlip API'},
+    {emoji:'📋',label:'Match Order'},
+    {emoji:'✅',label:'Complete'},
+    {emoji:'💰',label:'Wallet เครดิต'},
+    {emoji:'🔔',label:'Webhook แจ้งผล'}
+  ]
+};
+
+// ---- VPS data ----
+const vpsData = [
+  {num:1,name:'Gateway Node 1',role:'Primary Gateway',cls:'gw',
+   items:['Nginx (SSL Termination)','Gateway Service (:8080)','Rate Limiter','Load Balancer']},
+  {num:2,name:'Gateway Node 2',role:'Failover Gateway',cls:'gw',
+   items:['Nginx (Failover)','Gateway Service (:8080)','Health Check','Auto-failover']},
+  {num:3,name:'Core Services',role:'Core Business Logic',cls:'core',
+   items:['Auth Service (:8081)','User Service (:8082)','Order Service (:8083)','Wallet Service (:8084)','Withdrawal Service (:8085)','Commission Service (:8088)']},
+  {num:4,name:'Worker Services',role:'Background Workers',cls:'worker',
+   items:['Parser Service (:8086)','Bank Service (:8089)','Notification Service (:8087)','Telegram Bot (:8090)','Scheduler Service (:8091)']},
+  {num:5,name:'PostgreSQL Master',role:'Primary Database',cls:'db',
+   items:['PostgreSQL 15','20 Tables','Range Partitioning','WAL Streaming','pg_cron']},
+  {num:6,name:'PostgreSQL Replica + Redis',role:'Read Replica + Cache',cls:'db',
+   items:['PostgreSQL Read Replica','Redis 7 (Cache)','Redis (Sessions)','Redis (Distributed Locks)','Redis (Rate Limit Counters)']},
+  {num:7,name:'Monitoring',role:'Observability Stack',cls:'mon',
+   items:['Prometheus','Grafana Dashboards','Alertmanager','Node Exporter','Custom Metrics']},
+  {num:8,name:'Staging',role:'Test Environment',cls:'stg',
+   items:['Full Stack Clone','Isolated Network','Test Database','CI/CD Target']}
+];
+
+
+/* ==============================================================
+   TAB SWITCHING
+   ============================================================== */
+function switchTab(tab) {
+  // Deactivate all tabs and buttons
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+
+  // Activate the selected tab
+  document.getElementById('tab-' + tab).classList.add('active');
+
+  // Activate the corresponding nav button
+  const btns = document.querySelectorAll('.nav-btn');
+  const tabMap = ['overview','architecture','services','database','security','flows','vps'];
+  const idx = tabMap.indexOf(tab);
+  if (idx >= 0 && btns[idx]) btns[idx].classList.add('active');
+
+  // Scroll to top smoothly
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+
+/* ==============================================================
+   RENDER: Services Grid
+   ============================================================== */
+function renderServices() {
+  const grid = document.getElementById('servicesGrid');
+  grid.innerHTML = services.map(s => `
+    <div class="service-card" onclick="this.classList.toggle('expanded')">
+      <div class="service-header">
+        <span class="service-emoji">${s.emoji}</span>
+        <span class="service-name">${s.name}</span>
+        <span class="service-port">:${s.port}</span>
+      </div>
+      <div class="service-desc">${s.desc}</div>
+      <div class="service-tags">${s.tags.map(t=>'<span class="tag">'+t+'</span>').join('')}</div>
+      <div class="expand-hint">Click to expand / คลิกเพื่อดูเพิ่มเติม</div>
+      <div class="service-details">
+        <div class="detail-section">
+          <h4>📡 Endpoints</h4>
+          <ul>${s.endpoints.map(e=>'<li><code>'+e+'</code></li>').join('')}</ul>
+        </div>
+        <div class="detail-section">
+          <h4>📁 Key Files</h4>
+          <ul>${s.files.map(f=>'<li>'+f+'</li>').join('')}</ul>
+        </div>
+        <div class="detail-section">
+          <h4>🔗 Connects To</h4>
+          <ul>${s.connections.map(c=>'<li>'+c+'</li>').join('')}</ul>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+
+/* ==============================================================
+   RENDER: Database Grid
+   ============================================================== */
+function renderDatabase() {
+  const grid = document.getElementById('dbGrid');
+  grid.innerHTML = tables.map(t => `
+    <div class="db-table" onclick="this.classList.toggle('expanded')">
+      <div class="db-table-name">
+        ${t.name}
+        ${t.partitioned ? '<span class="db-badge partition">PARTITIONED</span>' : ''}
+      </div>
+      <div class="db-table-desc">${t.desc}</div>
+      <div class="db-columns">
+        ${t.cols.map(c => `
+          <div class="db-col">
+            <span class="db-col-name">${c.n}</span>
+            <span class="db-col-type">${c.t}</span>
+          </div>
+        `).join('')}
+      </div>
+      <div class="expand-hint">Click to see columns / คลิกเพื่อดูคอลัมน์</div>
+    </div>
+  `).join('');
+}
+
+
+/* ==============================================================
+   RENDER: Security Stack
+   ============================================================== */
+function renderSecurity() {
+  const stack = document.getElementById('securityStack');
+  stack.innerHTML = securityLayers.map(l => `
+    <div class="security-layer" onclick="this.classList.toggle('expanded')">
+      <div class="security-num">${l.num}</div>
+      <div class="security-info">
+        <div class="security-name">${l.name}</div>
+        <div class="security-detail">${l.detail}</div>
+      </div>
+      <div class="security-icon">${l.icon}</div>
+    </div>
+  `).join('');
+}
+
+
+/* ==============================================================
+   RENDER: Flow Steps
+   ============================================================== */
+function renderFlows() {
+  Object.keys(flows).forEach(flowName => {
+    const container = document.getElementById(flowName + 'Steps');
+    const steps = flows[flowName];
+    container.innerHTML = steps.map((s, i) => {
+      let html = `<div class="flow-step" data-flow="${flowName}" data-idx="${i}">
+        <span class="step-emoji">${s.emoji}</span>
+        <span class="step-label">${s.label}</span>
+      </div>`;
+      if (i < steps.length - 1) {
+        html += '<span class="flow-arrow">→</span>';
+      }
+      return html;
+    }).join('');
+  });
+}
+
+// Flow animation state
+const flowTimers = {};
+
+function playFlow(flowName) {
+  resetFlow(flowName);
+  const steps = document.querySelectorAll(`.flow-step[data-flow="${flowName}"]`);
+  let idx = 0;
+  flowTimers[flowName] = setInterval(() => {
+    if (idx >= steps.length) {
+      clearInterval(flowTimers[flowName]);
+      return;
+    }
+    steps[idx].classList.add('active');
+    idx++;
+  }, 600);
+}
+
+function resetFlow(flowName) {
+  if (flowTimers[flowName]) clearInterval(flowTimers[flowName]);
+  document.querySelectorAll(`.flow-step[data-flow="${flowName}"]`).forEach(s => s.classList.remove('active'));
+}
+
+
+/* ==============================================================
+   RENDER: VPS Grid
+   ============================================================== */
+function renderVPS() {
+  const grid = document.getElementById('vpsGrid');
+  grid.innerHTML = vpsData.map(v => `
+    <div class="vps-card ${v.cls}">
+      <div class="vps-num">${v.num}</div>
+      <div class="vps-name">VPS ${v.num}: ${v.name}</div>
+      <div class="vps-role">${v.role}</div>
+      <ul class="vps-services">
+        ${v.items.map(i => '<li>' + i + '</li>').join('')}
+      </ul>
+    </div>
+  `).join('');
+}
+
+
+/* ==============================================================
+   ARCHITECTURE DETAIL PANEL
+   ============================================================== */
+function showArchDetail(id) {
+  const s = archDetails[id];
+  if (!s) return;
+  const panel = document.getElementById('archPanel');
+  const overlay = document.getElementById('archOverlay');
+  document.getElementById('archPanelContent').innerHTML = `
+    <div style="text-align:center;margin-bottom:16px">
+      <span style="font-size:48px">${s.emoji}</span>
+      <h3 style="font-size:22px;font-weight:700;color:var(--text-bright);margin-top:8px">${s.name} Service</h3>
+      <span style="font-size:14px;color:var(--accent3);font-family:monospace">Port :${s.port}</span>
+    </div>
+    <p style="font-size:14px;color:var(--text-dim);margin-bottom:16px">${s.desc}</p>
+    <div class="detail-section">
+      <h4>📡 Endpoints</h4>
+      <ul>${s.endpoints.map(e=>'<li><code style="color:var(--accent3)">'+e+'</code></li>').join('')}</ul>
+    </div>
+    <div class="detail-section">
+      <h4>🏷️ Features</h4>
+      <div class="service-tags">${s.tags.map(t=>'<span class="tag">'+t+'</span>').join('')}</div>
+    </div>
+    <div class="detail-section">
+      <h4>🔗 Connects To</h4>
+      <ul>${s.connections.map(c=>'<li>'+c+'</li>').join('')}</ul>
+    </div>
+  `;
+  panel.classList.add('show');
+  overlay.classList.add('show');
+}
+
+function hideArchDetail() {
+  document.getElementById('archPanel').classList.remove('show');
+  document.getElementById('archOverlay').classList.remove('show');
+}
+
+
+/* ==============================================================
+   PARTICLES (decorative background)
+   ============================================================== */
+function createParticles() {
+  const container = document.getElementById('particles');
+  for (let i = 0; i < 20; i++) {
+    const p = document.createElement('div');
+    p.className = 'particle';
+    p.style.left = Math.random() * 100 + '%';
+    p.style.animationDelay = Math.random() * 15 + 's';
+    p.style.animationDuration = (10 + Math.random() * 15) + 's';
+    p.style.width = p.style.height = (2 + Math.random() * 4) + 'px';
+    container.appendChild(p);
+  }
+}
+
+
+/* ==============================================================
+   TIMESTAMP
+   ============================================================== */
+function setTimestamp() {
+  const now = new Date();
+  const opts = {year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'};
+  document.getElementById('updateTime').textContent = now.toLocaleDateString('th-TH', opts);
+}
+
+
+/* ==============================================================
+   INITIALIZATION
+   ============================================================== */
+document.addEventListener('DOMContentLoaded', () => {
+  renderServices();
+  renderDatabase();
+  renderSecurity();
+  renderFlows();
+  renderVPS();
+  createParticles();
+  setTimestamp();
+});
+</script>
+</body>
+</html>
