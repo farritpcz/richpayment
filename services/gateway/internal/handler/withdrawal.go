@@ -3,10 +3,11 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+
+	"github.com/farritpcz/richpayment/pkg/httpclient"
 )
 
 // CreateWithdrawalRequest is the JSON payload for creating a new withdrawal order.
@@ -41,18 +42,62 @@ type WithdrawalResponse struct {
 	// Status is the current withdrawal status (e.g. "pending", "approved").
 	Status string `json:"status"`
 	// CreatedAt is when the withdrawal was created.
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt string `json:"created_at"`
 }
 
-// WithdrawalHandler handles withdrawal-related API endpoints.
-type WithdrawalHandler struct{}
+// WithdrawalHandler handles withdrawal-related API endpoints in the gateway.
+//
+// INTER-SERVICE COMMUNICATION FLOW:
+// The gateway proxies all withdrawal requests to the withdrawal-service, which
+// owns the full withdrawal lifecycle (creation with balance hold, admin
+// approval/rejection, completion with bank transfer). The flow is:
+//
+//   Client (merchant) -> gateway-api (:8080) -> withdrawal-service (:8085)
+//
+// The withdrawal-service in turn communicates with:
+//   - wallet-service (:8084) for balance checks, holds, releases, and debits
+//   - commission-service (:8086) for recording fee splits on completion
+//
+// This creates a chain of inter-service calls:
+//   merchant -> gateway -> withdrawal-service -> wallet-service
+//                                             -> commission-service
+type WithdrawalHandler struct {
+	// withdrawalClient is the HTTP client configured to call the withdrawal-service.
+	// The withdrawal-service runs on port 8085 and manages the complete withdrawal
+	// lifecycle including balance holds, approval workflows, and bank transfers.
+	withdrawalClient *httpclient.ServiceClient
+}
 
-// NewWithdrawalHandler creates a new WithdrawalHandler.
-func NewWithdrawalHandler() *WithdrawalHandler {
-	return &WithdrawalHandler{}
+// NewWithdrawalHandler creates a new WithdrawalHandler wired to the withdrawal-service.
+//
+// Parameters:
+//   - withdrawalClient: an httpclient.ServiceClient pointing at the withdrawal-service
+//     base URL (e.g. http://localhost:8085). Used for all withdrawal-related
+//     inter-service calls from the gateway.
+func NewWithdrawalHandler(withdrawalClient *httpclient.ServiceClient) *WithdrawalHandler {
+	return &WithdrawalHandler{
+		withdrawalClient: withdrawalClient,
+	}
 }
 
 // Create handles POST /api/v1/withdrawals.
+//
+// INTER-SERVICE COMMUNICATION FLOW:
+//
+//  1. Merchant sends POST /api/v1/withdrawals to the gateway (:8080).
+//  2. Gateway validates basic request structure (required fields, positive amount).
+//  3. Gateway forwards the request via HTTP POST to the withdrawal-service at
+//     POST http://withdrawal-service:8085/api/v1/withdrawals.
+//  4. The withdrawal-service executes the full creation flow:
+//     a. Checks the merchant's daily withdrawal limit (via merchant config).
+//     b. Calls wallet-service GET /wallet/balance to verify sufficient funds.
+//     c. Calls wallet-service POST /wallet/debit (or hold endpoint) to reserve funds.
+//     d. Persists the withdrawal record in PostgreSQL with status "pending".
+//  5. The withdrawal-service response (created withdrawal) flows back through
+//     the gateway to the merchant.
+//
+// This design keeps the gateway stateless while the withdrawal-service
+// orchestrates the multi-step creation process with wallet interactions.
 func (h *WithdrawalHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req CreateWithdrawalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -73,21 +118,50 @@ func (h *WithdrawalHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stub: return a mock withdrawal response.
-	now := time.Now().UTC()
-	resp := WithdrawalResponse{
-		ID:              uuid.New().String(),
-		MerchantOrderID: req.MerchantOrderID,
-		Amount:          req.Amount,
-		Currency:        req.Currency,
-		Status:          "pending",
-		CreatedAt:       now,
+	// ---------------------------------------------------------------
+	// Forward the withdrawal creation request to the withdrawal-service.
+	//
+	// The withdrawal-service expects merchant_id, amount, currency,
+	// dest_type, and dest_details. We map the gateway's beneficiary
+	// fields into the withdrawal-service's destination format.
+	//
+	// Network path: gateway (:8080) --> withdrawal-service (:8085)
+	// Endpoint:     POST /api/v1/withdrawals
+	// ---------------------------------------------------------------
+	withdrawalReq := map[string]string{
+		"merchant_id":  "00000000-0000-0000-0000-000000000001", // TODO: extract from auth middleware
+		"amount":       req.Amount.String(),
+		"currency":     req.Currency,
+		"dest_type":    "bank",
+		"dest_details": `{"bank":"` + req.BeneficiaryBank + `","account":"` + req.BeneficiaryAccount + `","name":"` + req.BeneficiaryName + `"}`,
 	}
 
-	respondCreated(w, resp)
+	// result holds the raw JSON from the withdrawal-service so we can
+	// forward it as-is back to the merchant without schema coupling.
+	var result json.RawMessage
+	if err := h.withdrawalClient.Post(r.Context(), "/api/v1/withdrawals", withdrawalReq, &result); err != nil {
+		// The withdrawal-service is unreachable or returned an error.
+		// Return 502 Bad Gateway to indicate upstream failure.
+		respondError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to create withdrawal via withdrawal-service: "+err.Error())
+		return
+	}
+
+	// Forward the withdrawal-service response directly to the merchant.
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusCreated)
+	w.Write(result)
 }
 
 // Get handles GET /api/v1/withdrawals/{id}.
+//
+// INTER-SERVICE COMMUNICATION FLOW:
+//
+//  1. Merchant sends GET /api/v1/withdrawals/{id} to the gateway (:8080).
+//  2. Gateway validates the UUID format.
+//  3. Gateway forwards to the withdrawal-service at
+//     GET http://withdrawal-service:8085/api/v1/withdrawals/{id}.
+//  4. The withdrawal-service fetches from PostgreSQL and returns the withdrawal.
+//  5. The response flows back through the gateway to the merchant.
 func (h *WithdrawalHandler) Get(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	if _, err := uuid.Parse(idStr); err != nil {
@@ -95,16 +169,21 @@ func (h *WithdrawalHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stub: return a mock withdrawal.
-	now := time.Now().UTC()
-	resp := WithdrawalResponse{
-		ID:              idStr,
-		MerchantOrderID: "stub-order-001",
-		Amount:          decimal.NewFromInt(500),
-		Currency:        "THB",
-		Status:          "pending",
-		CreatedAt:       now,
+	// ---------------------------------------------------------------
+	// Forward the withdrawal lookup to the withdrawal-service.
+	//
+	// Network path: gateway (:8080) --> withdrawal-service (:8085)
+	// Endpoint:     GET /api/v1/withdrawals/{id}
+	// ---------------------------------------------------------------
+	var result json.RawMessage
+	if err := h.withdrawalClient.Get(r.Context(), "/api/v1/withdrawals/"+idStr, &result); err != nil {
+		// The withdrawal-service could not find the record or is unreachable.
+		respondError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to get withdrawal from withdrawal-service: "+err.Error())
+		return
 	}
 
-	respondOK(w, resp)
+	// Forward the response as-is to the merchant.
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write(result)
 }

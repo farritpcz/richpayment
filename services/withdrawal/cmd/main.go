@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/farritpcz/richpayment/pkg/config"
+	"github.com/farritpcz/richpayment/pkg/httpclient"
 	"github.com/farritpcz/richpayment/pkg/logger"
 	"github.com/farritpcz/richpayment/pkg/middleware"
 	"github.com/farritpcz/richpayment/services/withdrawal/internal/handler"
@@ -57,19 +58,49 @@ func main() {
 	withdrawalRepo := repository.NewStubWithdrawalRepo()
 
 	// ------------------------------------------------------------------
-	// Construct stub clients for wallet, commission, and merchant services.
-	// In production, these would be HTTP/gRPC clients connecting to the
-	// respective microservices. The stubs provide sensible defaults for
-	// local development and testing.
+	// Create HTTP clients for inter-service communication.
+	//
+	// The withdrawal-service calls two other services during the withdrawal
+	// lifecycle:
+	//
+	//   withdrawal-service (:8085) --> wallet-service (:8084)
+	//     - GetBalance:   Check merchant's available funds (CreateWithdrawal Step 2)
+	//     - HoldBalance:  Reserve funds for pending withdrawal (CreateWithdrawal Step 3)
+	//     - ReleaseHold:  Return held funds on rejection (RejectWithdrawal)
+	//     - DebitHold:    Permanently debit funds on completion (CompleteWithdrawal Step 4)
+	//
+	//   withdrawal-service (:8085) --> commission-service (:8086)
+	//     - RecordWithdrawalCommission: Record fee split (CompleteWithdrawal Step 5)
+	//
+	// Service URLs are configurable via environment variables.
 	// ------------------------------------------------------------------
+	walletServiceURL := config.Get("WALLET_SERVICE_URL", "http://localhost:8084")
+	commissionServiceURL := config.Get("COMMISSION_SERVICE_URL", "http://localhost:8086")
 
-	// walletClient handles balance checks, holds, releases, and debits.
-	walletClient := &service.StubWalletClient{}
+	log.Info("configured upstream service URLs for inter-service calls",
+		"wallet_service", walletServiceURL,
+		"commission_service", commissionServiceURL,
+	)
 
-	// commissionClient records fee splits on completed withdrawals.
-	commissionClient := &service.StubCommissionClient{}
+	// Create HTTP clients for the target services.
+	// These are passed to the HTTP-based WalletClient and CommissionClient
+	// implementations that replace the previous stub clients.
+	walletHTTPClient := httpclient.New(walletServiceURL, 10*time.Second)
+	commissionHTTPClient := httpclient.New(commissionServiceURL, 10*time.Second)
 
-	// merchantClient fetches merchant fee configuration and limits.
+	// walletClient now makes real HTTP calls to wallet-service (:8084)
+	// instead of returning stub data. It implements the WalletClient
+	// interface with GetBalance, HoldBalance, ReleaseHold, and DebitHold.
+	walletClient := service.NewHTTPWalletClient(walletHTTPClient)
+
+	// commissionClient now makes real HTTP calls to commission-service (:8086)
+	// instead of being a no-op stub. It implements the CommissionClient
+	// interface with RecordWithdrawalCommission.
+	commissionClient := service.NewHTTPCommissionClient(commissionHTTPClient)
+
+	// merchantClient still uses the stub for now — merchant configuration
+	// (fee percentages, daily limits) would come from the user-service.
+	// TODO: Replace with HTTP client calling user-service when ready.
 	merchantClient := &service.StubMerchantClient{}
 
 	// ------------------------------------------------------------------

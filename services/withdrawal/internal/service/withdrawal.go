@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/farritpcz/richpayment/pkg/errors"
+	"github.com/farritpcz/richpayment/pkg/httpclient"
 	"github.com/farritpcz/richpayment/pkg/logger"
 	"github.com/farritpcz/richpayment/pkg/models"
 	"github.com/farritpcz/richpayment/services/withdrawal/internal/repository"
@@ -561,4 +562,241 @@ func (c *StubMerchantClient) GetWithdrawalFeePct(_ context.Context, _ uuid.UUID)
 func (c *StubMerchantClient) GetDailyWithdrawalLimit(_ context.Context, _ uuid.UUID) (decimal.Decimal, error) {
 	// Default: 500,000 THB daily withdrawal limit.
 	return decimal.NewFromInt(500_000), nil
+}
+
+// ---------------------------------------------------------------------------
+// HTTP-based client implementations for real inter-service communication
+// ---------------------------------------------------------------------------
+//
+// These implementations replace the stub clients above for production use.
+// They make synchronous HTTP calls to the wallet-service and commission-service
+// to perform wallet operations and record commissions.
+//
+// INTER-SERVICE COMMUNICATION ARCHITECTURE:
+//
+// The withdrawal-service communicates with two other services during the
+// withdrawal lifecycle:
+//
+//   withdrawal-service (:8085) --> wallet-service (:8084)
+//     - GET /wallet/balance     — Check merchant's available balance
+//     - POST /wallet/debit      — Hold, release, or debit wallet balance
+//     - POST /wallet/credit     — Release a hold (credit back)
+//
+//   withdrawal-service (:8085) --> commission-service (:8086)
+//     - POST /internal/commission/calculate — Record fee split on completion
+//
+// The wallet interactions happen at multiple points in the withdrawal lifecycle:
+//   1. CreateWithdrawal:   Check balance + place hold on funds
+//   2. RejectWithdrawal:   Release the hold (return funds to available balance)
+//   3. CompleteWithdrawal: Debit the held amount + record commission
+//
+// ---------------------------------------------------------------------------
+
+// HTTPWalletClient implements the WalletClient interface by making HTTP calls
+// to the wallet-service. It is used in production to perform real balance
+// checks, holds, releases, and debits on merchant wallets.
+//
+// INTER-SERVICE CALLS:
+//
+//   withdrawal-service (:8085) --> wallet-service (:8084)
+//
+// The wallet-service exposes three endpoints used by this client:
+//   - GET  /wallet/balance — Returns available and held balances.
+//   - POST /wallet/credit  — Adds funds (used for releasing holds).
+//   - POST /wallet/debit   — Subtracts funds (used for holds and debits).
+type HTTPWalletClient struct {
+	// client is the HTTP client configured to call the wallet-service.
+	// It is created with httpclient.New() pointing at the wallet-service
+	// base URL (e.g. http://localhost:8084).
+	client *httpclient.ServiceClient
+}
+
+// NewHTTPWalletClient creates a new HTTPWalletClient for the given wallet-service URL.
+//
+// Parameters:
+//   - client: an httpclient.ServiceClient pointing at the wallet-service
+//     (e.g. httpclient.New("http://localhost:8084", 10*time.Second)).
+func NewHTTPWalletClient(client *httpclient.ServiceClient) *HTTPWalletClient {
+	return &HTTPWalletClient{client: client}
+}
+
+// walletBalanceResponse is the JSON response from the wallet-service
+// GET /wallet/balance endpoint. We only need the Balance field to check
+// available funds.
+type walletBalanceResponse struct {
+	Balance string `json:"balance"`
+}
+
+// GetBalance calls the wallet-service to retrieve the merchant's available
+// (non-held) balance.
+//
+// INTER-SERVICE CALL: withdrawal-service --> wallet-service (:8084)
+// Endpoint: GET /wallet/balance?owner_type=merchant&owner_id={id}&currency={cur}
+//
+// This is called during CreateWithdrawal (Step 2) to verify the merchant
+// has sufficient funds before placing a hold.
+func (c *HTTPWalletClient) GetBalance(ctx context.Context, merchantID uuid.UUID, currency string) (decimal.Decimal, error) {
+	// Build the query path for the wallet-service balance endpoint.
+	// The wallet-service identifies wallets by owner_type + owner_id + currency.
+	path := fmt.Sprintf("/wallet/balance?owner_type=merchant&owner_id=%s&currency=%s",
+		merchantID.String(), currency)
+
+	var resp walletBalanceResponse
+	if err := c.client.Get(ctx, path, &resp); err != nil {
+		return decimal.Zero, fmt.Errorf("http wallet client: get balance: %w", err)
+	}
+
+	// Parse the balance string into a decimal for precise comparison.
+	balance, err := decimal.NewFromString(resp.Balance)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("http wallet client: parse balance %q: %w", resp.Balance, err)
+	}
+
+	return balance, nil
+}
+
+// HoldBalance calls the wallet-service to place a hold on the specified
+// amount in the merchant's wallet.
+//
+// INTER-SERVICE CALL: withdrawal-service --> wallet-service (:8084)
+// Endpoint: POST /wallet/debit
+//
+// This is called during CreateWithdrawal (Step 3) to reserve funds. The held
+// amount is deducted from available balance but not permanently removed.
+// If the withdrawal is later rejected, the hold is released. If completed,
+// the hold is converted to a permanent debit.
+//
+// We use the debit endpoint with a "withdrawal_hold" entry type so the
+// wallet-service can track holds separately in the ledger.
+func (c *HTTPWalletClient) HoldBalance(ctx context.Context, merchantID uuid.UUID, amount decimal.Decimal, currency string, referenceID uuid.UUID) error {
+	// The wallet-service needs a wallet_id. In a full implementation,
+	// we would first look up the wallet by owner_type+owner_id+currency.
+	// For now, we use the merchantID as a wallet identifier placeholder.
+	req := map[string]string{
+		"wallet_id":      merchantID.String(), // TODO: look up actual wallet_id
+		"amount":         amount.String(),
+		"entry_type":     "withdrawal_hold",
+		"reference_type": "withdrawal",
+		"reference_id":   referenceID.String(),
+		"description":    fmt.Sprintf("Hold for withdrawal %s", referenceID.String()),
+	}
+
+	if err := c.client.Post(ctx, "/wallet/debit", req, nil); err != nil {
+		return fmt.Errorf("http wallet client: hold balance: %w", err)
+	}
+
+	return nil
+}
+
+// ReleaseHold calls the wallet-service to release a previously placed hold,
+// returning the amount to the merchant's available balance.
+//
+// INTER-SERVICE CALL: withdrawal-service --> wallet-service (:8084)
+// Endpoint: POST /wallet/credit
+//
+// This is called during RejectWithdrawal to reverse the hold. The credit
+// operation adds the amount back to the wallet, effectively undoing the
+// hold that was placed during CreateWithdrawal.
+func (c *HTTPWalletClient) ReleaseHold(ctx context.Context, merchantID uuid.UUID, amount decimal.Decimal, currency string, referenceID uuid.UUID) error {
+	req := map[string]string{
+		"wallet_id":      merchantID.String(), // TODO: look up actual wallet_id
+		"amount":         amount.String(),
+		"entry_type":     "withdrawal_release",
+		"reference_type": "withdrawal",
+		"reference_id":   referenceID.String(),
+		"description":    fmt.Sprintf("Release hold for rejected withdrawal %s", referenceID.String()),
+	}
+
+	if err := c.client.Post(ctx, "/wallet/credit", req, nil); err != nil {
+		return fmt.Errorf("http wallet client: release hold: %w", err)
+	}
+
+	return nil
+}
+
+// DebitHold calls the wallet-service to convert a held amount into a
+// permanent debit.
+//
+// INTER-SERVICE CALL: withdrawal-service --> wallet-service (:8084)
+// Endpoint: POST /wallet/debit
+//
+// This is called during CompleteWithdrawal (Step 4) after the bank transfer
+// has been confirmed. The held funds are permanently removed from the wallet.
+// The entry_type "withdrawal_debit" distinguishes this from the initial hold.
+func (c *HTTPWalletClient) DebitHold(ctx context.Context, merchantID uuid.UUID, amount decimal.Decimal, currency string, referenceID uuid.UUID) error {
+	req := map[string]string{
+		"wallet_id":      merchantID.String(), // TODO: look up actual wallet_id
+		"amount":         amount.String(),
+		"entry_type":     "withdrawal_debit",
+		"reference_type": "withdrawal",
+		"reference_id":   referenceID.String(),
+		"description":    fmt.Sprintf("Debit for completed withdrawal %s", referenceID.String()),
+	}
+
+	if err := c.client.Post(ctx, "/wallet/debit", req, nil); err != nil {
+		return fmt.Errorf("http wallet client: debit hold: %w", err)
+	}
+
+	return nil
+}
+
+// HTTPCommissionClient implements the CommissionClient interface by making
+// HTTP calls to the commission-service. It is used in production to record
+// fee splits when withdrawals are completed.
+//
+// INTER-SERVICE CALL:
+//
+//   withdrawal-service (:8085) --> commission-service (:8086)
+//   Endpoint: POST /internal/commission/calculate
+//
+// The commission-service calculates how the withdrawal fee is divided between
+// the system, agent, and partner, then records the split and credits the
+// respective wallets.
+type HTTPCommissionClient struct {
+	// client is the HTTP client configured to call the commission-service.
+	client *httpclient.ServiceClient
+}
+
+// NewHTTPCommissionClient creates a new HTTPCommissionClient for the given
+// commission-service URL.
+//
+// Parameters:
+//   - client: an httpclient.ServiceClient pointing at the commission-service
+//     (e.g. httpclient.New("http://localhost:8086", 10*time.Second)).
+func NewHTTPCommissionClient(client *httpclient.ServiceClient) *HTTPCommissionClient {
+	return &HTTPCommissionClient{client: client}
+}
+
+// RecordWithdrawalCommission calls the commission-service to record the
+// commission split for a completed withdrawal.
+//
+// INTER-SERVICE CALL: withdrawal-service --> commission-service (:8086)
+// Endpoint: POST /internal/commission/calculate
+//
+// This is called during CompleteWithdrawal (Step 5) after the bank transfer
+// has been executed and the wallet has been debited. The commission-service
+// receives the transaction details and fee amount, calculates the split
+// between system/agent/partner according to their configured percentages,
+// and records the result.
+//
+// Parameters:
+//   - withdrawalID: the UUID of the completed withdrawal (used as transaction_id).
+//   - merchantID: the UUID of the merchant (for looking up commission config).
+//   - feeAmount: the gross fee charged to the merchant.
+//   - currency: the ISO 4217 currency code (e.g. "THB").
+func (c *HTTPCommissionClient) RecordWithdrawalCommission(ctx context.Context, withdrawalID uuid.UUID, merchantID uuid.UUID, feeAmount decimal.Decimal, currency string) error {
+	req := map[string]string{
+		"transaction_type":   "withdrawal",
+		"transaction_id":     withdrawalID.String(),
+		"merchant_id":        merchantID.String(),
+		"transaction_amount": feeAmount.String(), // The fee amount is the commission base
+		"merchant_fee_pct":   "0.01",             // TODO: fetch from merchant config
+		"currency":           currency,
+	}
+
+	if err := c.client.Post(ctx, "/internal/commission/calculate", req, nil); err != nil {
+		return fmt.Errorf("http commission client: record withdrawal commission: %w", err)
+	}
+
+	return nil
 }

@@ -31,6 +31,7 @@ import (
 
 	"github.com/farritpcz/richpayment/pkg/config"
 	"github.com/farritpcz/richpayment/pkg/database"
+	"github.com/farritpcz/richpayment/pkg/httpclient"
 	"github.com/farritpcz/richpayment/pkg/logger"
 	"github.com/farritpcz/richpayment/pkg/middleware"
 	"github.com/farritpcz/richpayment/pkg/models"
@@ -99,6 +100,41 @@ func main() {
 	}
 
 	// ------------------------------------------------------------------
+	// Create HTTP clients for inter-service communication.
+	//
+	// When a deposit is completed (CompleteDeposit), the order-service
+	// needs to call three other services to finalise the settlement:
+	//
+	//   order-service --> wallet-service (:8084)
+	//     Credits the merchant's wallet with the net deposit amount.
+	//
+	//   order-service --> commission-service (:8086)
+	//     Records the fee split between system, agent, and partner.
+	//
+	//   order-service --> notification-service (:8090)
+	//     Delivers the completion webhook to the merchant's callback URL.
+	//
+	// Service URLs are configurable via environment variables for deployment
+	// flexibility (localhost for dev, Docker service names for production).
+	// ------------------------------------------------------------------
+	walletServiceURL := config.Get("WALLET_SERVICE_URL", "http://localhost:8084")
+	commissionServiceURL := config.Get("COMMISSION_SERVICE_URL", "http://localhost:8086")
+	notificationServiceURL := config.Get("NOTIFICATION_SERVICE_URL", "http://localhost:8090")
+
+	log.Info("configured upstream service URLs for inter-service calls",
+		"wallet_service", walletServiceURL,
+		"commission_service", commissionServiceURL,
+		"notification_service", notificationServiceURL,
+	)
+
+	// Create HTTP clients with a 10-second timeout for each target service.
+	// The timeout is generous enough for database-backed operations but
+	// short enough to fail fast if a downstream service is unresponsive.
+	walletClient := httpclient.New(walletServiceURL, 10*time.Second)
+	commissionClient := httpclient.New(commissionServiceURL, 10*time.Second)
+	notificationClient := httpclient.New(notificationServiceURL, 10*time.Second)
+
+	// ------------------------------------------------------------------
 	// Construct the repository and service layers.
 	// ------------------------------------------------------------------
 
@@ -106,8 +142,12 @@ func main() {
 	orderRepo := repository.NewPostgresOrderRepo(pgPool)
 
 	// depositSvc handles deposit order creation, retrieval, and completion.
+	// It receives HTTP clients for the wallet, commission, and notification
+	// services so it can make synchronous inter-service calls during the
+	// deposit completion flow.
 	depositSvc := service.NewDepositService(
 		orderRepo, rdb, orderExpiry, feePercent, matchStrategy,
+		walletClient, commissionClient, notificationClient,
 	)
 
 	// matcherSvc handles pairing incoming bank notifications with pending orders.

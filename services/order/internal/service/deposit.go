@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/farritpcz/richpayment/pkg/errors"
+	"github.com/farritpcz/richpayment/pkg/httpclient"
 	"github.com/farritpcz/richpayment/pkg/logger"
 	"github.com/farritpcz/richpayment/pkg/models"
 	"github.com/farritpcz/richpayment/services/order/internal/repository"
@@ -19,6 +21,24 @@ import (
 // DepositService encapsulates the core deposit order lifecycle: creation,
 // retrieval, and completion. It coordinates between the PostgreSQL repository,
 // Redis caches/sets, QR code generation, and external webhook delivery.
+//
+// INTER-SERVICE COMMUNICATION:
+// When a deposit is completed (CompleteDeposit), this service makes HTTP calls
+// to three other services to finalise the settlement:
+//
+//   order-service (:8083) --> wallet-service (:8084)
+//     POST /wallet/credit — Credits the merchant's wallet with the net amount.
+//
+//   order-service (:8083) --> commission-service (:8086)
+//     POST /internal/commission/calculate — Records the fee split between
+//     system, agent, and partner.
+//
+//   order-service (:8083) --> notification-service (:8090)
+//     POST /internal/webhook/send — Delivers the deposit completion webhook
+//     to the merchant's callback URL.
+//
+// These HTTP calls replace the previous Redis pub/sub approach, providing
+// synchronous error handling and direct response validation.
 type DepositService struct {
 	// repo is the persistence layer for deposit orders (PostgreSQL).
 	repo repository.OrderRepository
@@ -41,6 +61,19 @@ type DepositService struct {
 	//     decimal so every pending order has a distinct amount.
 	//   - "time_based": match by exact amount and pick the oldest pending order.
 	matchStrategy string
+
+	// walletClient is the HTTP client for calling the wallet-service (:8084).
+	// Used in CompleteDeposit to credit the merchant's wallet with the net
+	// deposit amount after fee deduction.
+	walletClient *httpclient.ServiceClient
+
+	// commissionClient is the HTTP client for calling the commission-service (:8086).
+	// Used in CompleteDeposit to record the fee split (system/agent/partner shares).
+	commissionClient *httpclient.ServiceClient
+
+	// notificationClient is the HTTP client for calling the notification-service (:8090).
+	// Used in CompleteDeposit to trigger webhook delivery to the merchant.
+	notificationClient *httpclient.ServiceClient
 }
 
 // NewDepositService constructs a DepositService with all required dependencies.
@@ -51,19 +84,28 @@ type DepositService struct {
 //   - orderExpiry: the duration after which an unmatched order expires.
 //   - feePercent: the merchant fee rate (e.g. 0.02 for 2%).
 //   - matchStrategy: either "unique_amount" or "time_based".
+//   - walletClient: HTTP client for wallet-service (:8084) — credits merchant wallets.
+//   - commissionClient: HTTP client for commission-service (:8086) — records fee splits.
+//   - notificationClient: HTTP client for notification-service (:8090) — sends webhooks.
 func NewDepositService(
 	repo repository.OrderRepository,
 	rdb *redis.Client,
 	orderExpiry time.Duration,
 	feePercent decimal.Decimal,
 	matchStrategy string,
+	walletClient *httpclient.ServiceClient,
+	commissionClient *httpclient.ServiceClient,
+	notificationClient *httpclient.ServiceClient,
 ) *DepositService {
 	return &DepositService{
-		repo:          repo,
-		rdb:           rdb,
-		orderExpiry:   orderExpiry,
-		feePercent:    feePercent,
-		matchStrategy: matchStrategy,
+		repo:               repo,
+		rdb:                rdb,
+		orderExpiry:        orderExpiry,
+		feePercent:         feePercent,
+		matchStrategy:      matchStrategy,
+		walletClient:       walletClient,
+		commissionClient:   commissionClient,
+		notificationClient: notificationClient,
 	}
 }
 
@@ -293,39 +335,131 @@ func (s *DepositService) CompleteDeposit(
 	}
 
 	// ---------------------------------------------------------------
-	// Step 4: Credit the merchant's wallet.
-	// We publish a wallet credit event to Redis so the wallet-service
-	// can process it asynchronously. This decouples the order-service
-	// from direct wallet database writes.
+	// Step 4: Credit the merchant's wallet via HTTP call to wallet-service.
+	//
+	// INTER-SERVICE CALL: order-service (:8083) --> wallet-service (:8084)
+	// Endpoint: POST /wallet/credit
+	//
+	// This replaces the previous Redis pub/sub approach with a synchronous
+	// HTTP call so we get immediate confirmation that the credit was applied.
+	// The wallet-service will:
+	//   a) Look up the merchant's wallet by wallet_id.
+	//   b) Add the net amount to the wallet balance.
+	//   c) Create a ledger entry for audit trail.
+	//
+	// We need the wallet_id (not the merchant_id) for the credit call.
+	// In production, we would look this up. For now we use the merchant_id
+	// as a placeholder wallet identifier.
 	// ---------------------------------------------------------------
-	walletEvent := fmt.Sprintf(
-		`{"merchant_id":"%s","order_id":"%s","amount":"%s","currency":"THB"}`,
-		order.MerchantID.String(), orderID.String(), netAmount.String(),
-	)
-	s.rdb.Publish(ctx, "wallet:credit", walletEvent)
+	if s.walletClient != nil {
+		walletCreditReq := map[string]string{
+			"wallet_id":      order.MerchantID.String(), // TODO: look up actual wallet_id
+			"amount":         netAmount.String(),
+			"entry_type":     "deposit_credit",
+			"reference_type": "deposit_order",
+			"reference_id":   orderID.String(),
+			"description":    fmt.Sprintf("Deposit credit for order %s", orderID.String()),
+		}
+		if err := s.walletClient.Post(ctx, "/wallet/credit", walletCreditReq, nil); err != nil {
+			// Log the error but do not fail the completion — the wallet credit
+			// can be reconciled later. The order has already been marked as completed
+			// in PostgreSQL, so we proceed with the remaining steps.
+			logger.Error("failed to credit merchant wallet via wallet-service",
+				"order_id", orderID.String(),
+				"merchant_id", order.MerchantID.String(),
+				"net_amount", netAmount.String(),
+				"error", err,
+			)
+		} else {
+			logger.Info("merchant wallet credited via wallet-service",
+				"order_id", orderID.String(),
+				"merchant_id", order.MerchantID.String(),
+				"net_amount", netAmount.String(),
+			)
+		}
+	}
 
 	// ---------------------------------------------------------------
-	// Step 5: Record commission split.
-	// Publish a commission event for the commission-service to process
-	// the fee split between system, agent, and partner.
+	// Step 5: Record commission split via HTTP call to commission-service.
+	//
+	// INTER-SERVICE CALL: order-service (:8083) --> commission-service (:8086)
+	// Endpoint: POST /internal/commission/calculate
+	//
+	// The commission-service calculates the fee split between system, agent,
+	// and partner, then records it in its database and credits the respective
+	// wallets. The fee amount is the gross fee charged to the merchant;
+	// the commission-service decides how to divide it.
 	// ---------------------------------------------------------------
-	commissionEvent := fmt.Sprintf(
-		`{"transaction_type":"deposit","transaction_id":"%s","merchant_id":"%s","fee_amount":"%s","currency":"THB"}`,
-		orderID.String(), order.MerchantID.String(), feeAmount.String(),
-	)
-	s.rdb.Publish(ctx, "commission:record", commissionEvent)
+	if s.commissionClient != nil {
+		commissionReq := map[string]string{
+			"transaction_type":   "deposit",
+			"transaction_id":     orderID.String(),
+			"merchant_id":        order.MerchantID.String(),
+			"transaction_amount": actualAmount.String(),
+			"merchant_fee_pct":   s.feePercent.String(),
+			"currency":           "THB",
+		}
+		if err := s.commissionClient.Post(ctx, "/internal/commission/calculate", commissionReq, nil); err != nil {
+			// Log but do not fail — commission can be reconciled later.
+			logger.Error("failed to record commission via commission-service",
+				"order_id", orderID.String(),
+				"fee_amount", feeAmount.String(),
+				"error", err,
+			)
+		} else {
+			logger.Info("commission recorded via commission-service",
+				"order_id", orderID.String(),
+				"fee_amount", feeAmount.String(),
+			)
+		}
+	}
 
 	// ---------------------------------------------------------------
-	// Step 6: Trigger merchant webhook notification.
-	// Publish a webhook event so the notification-service can deliver
-	// the deposit completion callback to the merchant's endpoint.
+	// Step 6: Trigger merchant webhook notification via HTTP call to
+	// notification-service.
+	//
+	// INTER-SERVICE CALL: order-service (:8083) --> notification-service (:8090)
+	// Endpoint: POST /internal/webhook/send
+	//
+	// The notification-service delivers a signed webhook payload to the
+	// merchant's callback URL. If the first delivery attempt fails, the
+	// notification-service schedules retries with exponential backoff.
+	//
+	// The webhook payload contains the order completion details so the
+	// merchant can update their own system (mark payment as received,
+	// fulfil the customer's order, etc.).
 	// ---------------------------------------------------------------
-	webhookEvent := fmt.Sprintf(
-		`{"order_id":"%s","merchant_id":"%s","merchant_order_id":"%s","status":"completed","amount":"%s","net_amount":"%s"}`,
-		orderID.String(), order.MerchantID.String(), order.MerchantOrderID,
-		actualAmount.String(), netAmount.String(),
-	)
-	s.rdb.Publish(ctx, "webhook:send", webhookEvent)
+	if s.notificationClient != nil {
+		// Build the webhook payload that the merchant will receive.
+		webhookPayload, _ := json.Marshal(map[string]string{
+			"order_id":          orderID.String(),
+			"merchant_id":       order.MerchantID.String(),
+			"merchant_order_id": order.MerchantOrderID,
+			"status":            "completed",
+			"amount":            actualAmount.String(),
+			"net_amount":        netAmount.String(),
+			"currency":          "THB",
+		})
+
+		webhookReq := map[string]interface{}{
+			"merchant_id":    order.MerchantID.String(),
+			"order_id":       orderID.String(),
+			"webhook_url":    "https://merchant.example.com/callback", // TODO: fetch from merchant config
+			"webhook_secret": "placeholder-secret",                    // TODO: fetch from merchant config
+			"payload":        json.RawMessage(webhookPayload),
+		}
+		if err := s.notificationClient.Post(ctx, "/internal/webhook/send", webhookReq, nil); err != nil {
+			// Log but do not fail — the notification-service will retry delivery.
+			logger.Error("failed to send webhook via notification-service",
+				"order_id", orderID.String(),
+				"error", err,
+			)
+		} else {
+			logger.Info("webhook delivery triggered via notification-service",
+				"order_id", orderID.String(),
+			)
+		}
+	}
 
 	// Remove the order from the pending and expiry Redis sets since
 	// it is now completed and no longer needs matching or timeout.
