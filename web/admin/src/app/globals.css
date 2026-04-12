@@ -1,0 +1,176 @@
+/* =====================================================
+ * Global Styles - สไตล์ทั่วทั้ง Admin Dashboard
+ * Tailwind CSS v3 + CSS Variables สำหรับ shadcn theme
+ * ===================================================== */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =====================================================
+ * CSS Variables - ตัวแปรสี Light / Dark theme
+ * ใช้ HSL format สำหรับ compatibility กับ Tailwind v3
+ * ===================================================== */
+
+@layer base {
+  :root {
+    /* พื้นหลัง / Background */
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+
+    /* Card */
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+
+    /* Popover */
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+
+    /* Primary - Indigo brand color */
+    --primary: 239 84% 67%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary */
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+
+    /* Muted */
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+
+    /* Accent */
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+
+    /* Destructive */
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+
+    /* Border & Input */
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 239 84% 67%;
+
+    /* Chart colors */
+    --chart-1: 239 84% 67%;
+    --chart-2: 271 81% 56%;
+    --chart-3: 142 71% 45%;
+    --chart-4: 38 92% 50%;
+    --chart-5: 0 84% 60%;
+
+    /* Radius */
+    --radius: 0.625rem;
+  }
+
+  .dark {
+    /* พื้นหลัง Dark mode - Slate tones */
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+
+    /* Card - เข้มกว่าพื้นหลัง */
+    --card: 217 33% 17%;
+    --card-foreground: 210 40% 98%;
+
+    /* Popover */
+    --popover: 217 33% 17%;
+    --popover-foreground: 210 40% 98%;
+
+    /* Primary - Indigo */
+    --primary: 239 84% 67%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary */
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    /* Muted */
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    /* Accent */
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 98%;
+
+    /* Destructive */
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+
+    /* Border */
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 239 84% 67%;
+
+    /* Chart colors */
+    --chart-1: 239 84% 67%;
+    --chart-2: 271 81% 56%;
+    --chart-3: 142 71% 45%;
+    --chart-4: 38 92% 50%;
+    --chart-5: 0 84% 60%;
+  }
+
+  /* Reset borders & outline ทั่วทั้งหน้า */
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* =====================================================
+ * Custom Animations - แอนิเมชันสำหรับ Dashboard
+ * fadeInUp: เด้งขึ้นจากล่าง (ใช้กับ summary cards)
+ * fadeIn: จางเข้า (ใช้กับ login card)
+ * shake: สั่น (ใช้กับ form เมื่อ error)
+ * ===================================================== */
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+/* animate-fade-in-up - เด้งขึ้นจากล่าง 20px + จาง→ชัด */
+.animate-fade-in-up {
+  animation: fadeInUp 0.5s ease-out forwards;
+}
+
+/* animate-fade-in - จาง→ชัด (ใช้กับ login card) */
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+/* animate-shake - สั่นซ้าย-ขวา (ใช้เมื่อ login ผิดพลาด) */
+.animate-shake {
+  animation: shake 0.3s ease-in-out;
+}
+
+/* =====================================================
+ * Glassmorphism Utilities - สไตล์กระจกฝ้า
+ * ใช้สำหรับ cards, modals, overlays ทั่ว dashboard
+ * ===================================================== */
+
+/* glass - Glassmorphism พื้นฐาน (blur 16px) */
+.glass {
+  backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* glass-card - Glassmorphism สำหรับ card (blur 24px + shadow) */
+.glass-card {
+  backdrop-filter: blur(24px) saturate(200%);
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}

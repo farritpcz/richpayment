@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/farritpcz/richpayment/pkg/config"
+	"github.com/farritpcz/richpayment/pkg/database"
 	"github.com/farritpcz/richpayment/pkg/logger"
 	"github.com/farritpcz/richpayment/pkg/middleware"
 	"github.com/farritpcz/richpayment/services/telegram/internal/easyslip"
@@ -85,9 +86,24 @@ func main() {
 	// ------------------------------------------------------------------
 
 	// slipRepo is the persistence layer for slip verification records.
-	// Using a stub implementation for development; replace with PostgreSQL
-	// implementation in production.
-	slipRepo := repository.NewStubSlipRepository()
+	// หากมี DATABASE_URL จะใช้ PostgreSQL, ไม่มีก็ fallback เป็น stub
+	var slipRepo repository.SlipRepository
+
+	dbDSN := config.Get("DATABASE_URL", "")
+	if dbDSN != "" {
+		// เชื่อมต่อ PostgreSQL ด้วย connection pool (max 10 connections)
+		pool, err := database.NewPostgresPool(context.Background(), dbDSN, 10)
+		if err != nil {
+			log.Error("failed to connect to PostgreSQL", "error", err)
+			os.Exit(1)
+		}
+		defer pool.Close()
+		log.Info("connected to PostgreSQL for telegram-service")
+		slipRepo = repository.NewPostgresSlipRepo(pool)
+	} else {
+		log.Warn("DATABASE_URL not set, using in-memory stub repository")
+		slipRepo = repository.NewStubSlipRepository()
+	}
 
 	// ------------------------------------------------------------------
 	// Construct service layer.

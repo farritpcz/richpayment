@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/farritpcz/richpayment/services/auth/internal/handler"
@@ -43,8 +44,34 @@ func main() {
 	}
 	defer rdb.Close()
 
-	// Stub repository (replace with Postgres-backed implementation later).
-	repo := repository.NewStubRepository()
+	// ------------------------------------------------------------------
+	// Construct the repository layer.
+	// หากมี DATABASE_URL จะใช้ PostgreSQL, ไม่มีก็ fallback เป็น stub
+	// ------------------------------------------------------------------
+	var repo repository.AuthRepository
+
+	dbDSN := envOrDefault("DATABASE_URL", "")
+	if dbDSN != "" {
+		// เชื่อมต่อ PostgreSQL ด้วย connection pool
+		pgConfig, pgErr := pgxpool.ParseConfig(dbDSN)
+		if pgErr != nil {
+			log.Error("failed to parse DATABASE_URL", "err", pgErr)
+			os.Exit(1)
+		}
+		pgConfig.MaxConns = 20
+		pgConfig.MinConns = 5
+		pool, pgErr := pgxpool.NewWithConfig(ctx, pgConfig)
+		if pgErr != nil {
+			log.Error("failed to connect to PostgreSQL", "err", pgErr)
+			os.Exit(1)
+		}
+		defer pool.Close()
+		log.Info("connected to PostgreSQL for auth-service")
+		repo = repository.NewPostgresAuthRepo(pool)
+	} else {
+		log.Warn("DATABASE_URL not set, using stub repository")
+		repo = repository.NewStubRepository()
+	}
 
 	// Services.
 	totpSvc := service.NewTOTPService()

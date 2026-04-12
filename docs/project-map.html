@@ -419,6 +419,7 @@ body::before{
         <button class="nav-btn" onclick="switchTab('security')">🛡️ Security</button>
         <button class="nav-btn" onclick="switchTab('flows')">🔄 Flows</button>
         <button class="nav-btn" onclick="switchTab('vps')">🖥️ VPS</button>
+        <button class="nav-btn" onclick="switchTab('frontend')">🎨 Frontend</button>
       </nav>
     </div>
   </header>
@@ -514,6 +515,7 @@ body::before{
         <div class="quick-link" onclick="switchTab('security')"><div class="ql-icon">🛡️</div><div class="ql-label">11 Security Layers</div></div>
         <div class="quick-link" onclick="switchTab('flows')"><div class="ql-icon">🔄</div><div class="ql-label">Payment Flows</div></div>
         <div class="quick-link" onclick="switchTab('vps')"><div class="ql-icon">🖥️</div><div class="ql-label">7+1 VPS</div></div>
+        <div class="quick-link" onclick="switchTab('frontend')"><div class="ql-icon">🎨</div><div class="ql-label">Admin Dashboard</div></div>
       </div>
     </div>
 
@@ -763,13 +765,141 @@ body::before{
       </div>
     </div>
 
+    <!-- ========================================================
+         TAB: FRONTEND - Admin Dashboard Architecture
+         ======================================================== -->
+    <div id="tab-frontend" class="tab-content">
+      <h2 class="section-title">Admin Dashboard / แดชบอร์ดผู้ดูแล</h2>
+      <p class="section-subtitle">Next.js 14 + shadcn/ui + Tailwind + React Query | web/admin/src/</p>
+
+      <div class="card-grid">
+        <!-- Core Libraries -->
+        <div class="service-card">
+          <div class="card-header">
+            <div class="card-icon" style="background:linear-gradient(135deg,var(--accent),var(--accent2))">📦</div>
+            <div>
+              <h3 class="card-title">Core Libraries</h3>
+              <span class="card-badge" style="background:rgba(99,102,241,.2);color:var(--accent)">src/lib/</span>
+            </div>
+          </div>
+          <div class="detail-section">
+            <h4>Files</h4>
+            <ul>
+              <li>utils.ts - cn(), formatCurrency(), formatDate(), formatCompact()</li>
+              <li>permissions.ts - 21 RBAC bitmask constants (mirrors Go backend)</li>
+              <li>api-client.ts - apiFetch() wrapper + ApiError class + auto 401 redirect</li>
+              <li>auth.ts - login(), logout(), validateSession() via BFF</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Type Definitions -->
+        <div class="service-card">
+          <div class="card-header">
+            <div class="card-icon" style="background:linear-gradient(135deg,var(--accent3),var(--info))">📝</div>
+            <div>
+              <h3 class="card-title">Type Definitions</h3>
+              <span class="card-badge" style="background:rgba(6,182,212,.2);color:var(--accent3)">src/types/</span>
+            </div>
+          </div>
+          <div class="detail-section">
+            <h4>Files</h4>
+            <ul>
+              <li>auth.ts - LoginRequest, LoginResponse, User interfaces</li>
+              <li>api.ts - PaginatedResponse&lt;T&gt;, ApiErrorResponse</li>
+              <li>dashboard.ts - SummaryCardData, ChartDataPoint, DashboardSummary</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- i18n System -->
+        <div class="service-card">
+          <div class="card-header">
+            <div class="card-icon" style="background:linear-gradient(135deg,var(--success),#059669)">🌐</div>
+            <div>
+              <h3 class="card-title">i18n System</h3>
+              <span class="card-badge" style="background:rgba(16,185,129,.2);color:var(--success)">src/i18n/</span>
+            </div>
+          </div>
+          <div class="detail-section">
+            <h4>Files</h4>
+            <ul>
+              <li>th.ts - Thai dictionary (common, auth, sidebar, header, dashboard, status)</li>
+              <li>en.ts - English dictionary (same structure)</li>
+              <li>index.tsx - I18nProvider + useTranslation() hook (Context-based)</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Providers -->
+        <div class="service-card">
+          <div class="card-header">
+            <div class="card-icon" style="background:linear-gradient(135deg,var(--warning),#d97706)">🔧</div>
+            <div>
+              <h3 class="card-title">Providers</h3>
+              <span class="card-badge" style="background:rgba(245,158,11,.2);color:var(--warning)">src/providers/</span>
+            </div>
+          </div>
+          <div class="detail-section">
+            <h4>Files</h4>
+            <ul>
+              <li>theme-provider.tsx - Dark/Light mode (next-themes, default: dark)</li>
+              <li>query-provider.tsx - React Query (staleTime: 5s, retry: 1)</li>
+              <li>auth-provider.tsx - Session validation + auto redirect to /login</li>
+              <li>i18n-provider.tsx - Load persisted locale from localStorage</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Hooks -->
+        <div class="service-card">
+          <div class="card-header">
+            <div class="card-icon" style="background:linear-gradient(135deg,var(--danger),#dc2626)">🪝</div>
+            <div>
+              <h3 class="card-title">Custom Hooks</h3>
+              <span class="card-badge" style="background:rgba(239,68,68,.2);color:var(--danger)">src/hooks/</span>
+            </div>
+          </div>
+          <div class="detail-section">
+            <h4>Files</h4>
+            <ul>
+              <li>use-permissions.ts - can() / canAny() for RBAC checks in components</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- BFF API Routes -->
+        <div class="service-card">
+          <div class="card-header">
+            <div class="card-icon" style="background:linear-gradient(135deg,var(--info),#2563eb)">🔀</div>
+            <div>
+              <h3 class="card-title">BFF API Routes</h3>
+              <span class="card-badge" style="background:rgba(59,130,246,.2);color:var(--info)">src/app/api/</span>
+            </div>
+          </div>
+          <div class="detail-section">
+            <h4>Auth Routes</h4>
+            <ul>
+              <li>auth/login/route.ts - Proxy to auth-service + set HttpOnly cookie</li>
+              <li>auth/logout/route.ts - Clear session + delete cookie</li>
+              <li>auth/validate/route.ts - Validate session cookie with backend</li>
+            </ul>
+            <h4>Generic Proxy</h4>
+            <ul>
+              <li>proxy/[...path]/route.ts - Routes to 7 backend services by path prefix</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </main>
 
   <!-- ==========================================================
        FOOTER
        ========================================================== -->
   <footer class="footer">
-    <p>RichPayment Project Dashboard | 12 Microservices | Go + PostgreSQL + Redis + NATS</p>
+    <p>RichPayment Project Dashboard | 12 Microservices + Admin Dashboard | Go + Next.js + PostgreSQL + Redis + NATS</p>
     <p>Last updated / อัปเดตล่าสุด: <span class="update-time" id="updateTime"></span></p>
   </footer>
 
@@ -796,7 +926,7 @@ const services = [
     desc:'Authentication Service - จัดการ JWT tokens, 2FA (TOTP), RBAC roles, sessions',
     tags:['JWT','2FA/TOTP','RBAC','Sessions','IP Binding'],
     endpoints:['/api/v1/login','/api/v1/logout','/api/v1/refresh','/api/v1/2fa/setup','/api/v1/2fa/verify'],
-    files:['cmd/auth/main.go','internal/auth/handler.go','internal/auth/jwt.go','internal/auth/totp.go','internal/auth/rbac.go'],
+    files:['cmd/auth/main.go','internal/auth/handler.go','internal/auth/jwt.go','internal/auth/totp.go','internal/auth/rbac.go','internal/auth/postgres.go'],
     connections:['user','gateway']
   },
   {
@@ -804,7 +934,7 @@ const services = [
     desc:'User Management - CRUD สำหรับ admin, merchant, agent, partner พร้อม hierarchy',
     tags:['CRUD','Merchant','Agent','Partner','Admin'],
     endpoints:['/api/v1/users','/api/v1/users/:id','/api/v1/merchants','/api/v1/agents'],
-    files:['cmd/user/main.go','internal/user/handler.go','internal/user/service.go','internal/user/repository.go'],
+    files:['cmd/user/main.go','internal/user/handler.go','internal/user/service.go','internal/user/repository.go','internal/user/postgres_user_repo.go'],
     connections:['auth']
   },
   {
@@ -828,7 +958,7 @@ const services = [
     desc:'Withdrawal Processing - คำขอถอนเงิน, approval flow, admin review',
     tags:['Withdrawal','Approval','Admin Review','Hold/Release'],
     endpoints:['/api/v1/withdrawals','/api/v1/withdrawals/:id/approve','/api/v1/withdrawals/:id/reject'],
-    files:['cmd/withdrawal/main.go','internal/withdrawal/handler.go','internal/withdrawal/service.go'],
+    files:['cmd/withdrawal/main.go','internal/withdrawal/handler.go','internal/withdrawal/service.go','internal/withdrawal/postgres_withdrawal_repo.go'],
     connections:['wallet','commission','notification','gateway']
   },
   {
@@ -868,7 +998,7 @@ const services = [
     desc:'Telegram Bot - รับสลิปจากกลุ่ม Telegram, ตรวจสอบผ่าน EasySlip API, match order',
     tags:['Telegram Bot','Slip Verify','EasySlip API','Group Chat'],
     endpoints:['/api/v1/telegram/webhook','/api/v1/telegram/verify'],
-    files:['cmd/telegram/main.go','internal/telegram/handler.go','internal/telegram/bot.go','internal/telegram/easyslip.go'],
+    files:['cmd/telegram/main.go','internal/telegram/handler.go','internal/telegram/bot.go','internal/telegram/easyslip.go','internal/telegram/postgres_slip_repo.go'],
     connections:['order']
   },
   {

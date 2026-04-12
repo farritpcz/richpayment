@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/farritpcz/richpayment/pkg/config"
+	"github.com/farritpcz/richpayment/pkg/database"
 	"github.com/farritpcz/richpayment/pkg/httpclient"
 	"github.com/farritpcz/richpayment/pkg/logger"
 	"github.com/farritpcz/richpayment/pkg/middleware"
@@ -51,11 +52,25 @@ func main() {
 
 	// ------------------------------------------------------------------
 	// Construct the repository layer.
-	// In production this would be a PostgreSQL-backed implementation.
-	// For now we use the in-memory stub to allow the service to start
-	// without external dependencies.
+	// หากมี DATABASE_URL จะใช้ PostgreSQL, ไม่มีก็ fallback เป็น stub
 	// ------------------------------------------------------------------
-	withdrawalRepo := repository.NewStubWithdrawalRepo()
+	var withdrawalRepo repository.WithdrawalRepository
+
+	dbDSN := config.Get("DATABASE_URL", "")
+	if dbDSN != "" {
+		// เชื่อมต่อ PostgreSQL ด้วย connection pool (max 20 connections)
+		pool, err := database.NewPostgresPool(context.Background(), dbDSN, 20)
+		if err != nil {
+			log.Error("failed to connect to PostgreSQL", "error", err)
+			os.Exit(1)
+		}
+		defer pool.Close()
+		log.Info("connected to PostgreSQL for withdrawal-service")
+		withdrawalRepo = repository.NewPostgresWithdrawalRepo(pool)
+	} else {
+		log.Warn("DATABASE_URL not set, using in-memory stub repository")
+		withdrawalRepo = repository.NewStubWithdrawalRepo()
+	}
 
 	// ------------------------------------------------------------------
 	// Create HTTP clients for inter-service communication.
